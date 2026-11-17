@@ -521,7 +521,7 @@
     const sec = (t, c) => c ? '<h3>' + t + '</h3><p>' + esc(c) + '</p>' : '';
     const four = fourText(v);
     return '<header class="head"><div><h1>门诊病历' + (v.demo ? ' <span class="tag gray">示例</span>' : '') + '</h1><p class="sub"><a class="link" href="#patient/' + p.id + '">' + esc(p.name) + '</a> / ' + dTime(v.date) + ' ' + v.type + '</p></div>' +
-      '<div class="acts"><button class="btn danger" data-act="visit-del" data-id="' + v.id + '">删除</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/edit/' + v.id + '">修改</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用）</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="record">打印病历</button><button class="btn primary" data-act="print" data-id="' + v.id + '" data-mode="rx">打印处方笺</button></div></header>' +
+      '<div class="acts"><button class="btn danger" data-act="visit-del" data-id="' + v.id + '">删除</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/edit/' + v.id + '">修改</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用）</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="record">打印病历</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="rx">打印处方笺</button>' + (v.rx.herbs.length ? '<button class="btn primary" data-act="sheet-img" data-id="' + v.id + '" data-mode="rx">处方图片</button>' : '') + '</div></header>' +
       '<section class="card"><h2>患者</h2>' + (p.id ? patientInfo(p) : '<p class="muted">患者档案已删除</p>') + '</section>' +
       '<section class="card rec"><h2>病历' + (v.pregnant ? ' <span class="tag zhu">妊娠期</span>' : '') + '</h2>' + sec('主诉', v.chief) + sec('现病史', v.hpi) + sec('四诊', four) + photoSec(v) + sec('四诊补充', v.exam) + sec('上次治疗的疗效', v.effect) +
       '<h3>诊断</h3><p>' + esc([v.disease && '中医：' + v.disease, v.syndrome && '证型：' + v.syndrome, v.western && '西医：' + v.western].filter(Boolean).join('　') || '—') + '</p>' + sec('治法', v.method) +
@@ -544,7 +544,76 @@
       : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
       '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
     $('#print').innerHTML = html;
-    openModal('<div class="sheet preview">' + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+    openModal('<div class="sheet preview">' + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+  }
+
+  /* ---------- 处方笺图片（发微信用）：直接画在画布上，不依赖外部库 ---------- */
+  let sheetFile = null;
+  function drawSheet(v, mode) {
+    const p = P(v.patientId) || { name: '', gender: '' }, s = db.settings;
+    const W = 1080, M = 64, CW = W - M * 2, LW = 130;
+    const SANS = '"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","Noto Sans SC",sans-serif', KAI = '"KaiTi","STKaiti","Kaiti SC",' + SANS;
+    const dx = [v.disease, v.syndrome].filter(Boolean).join(' · ') + (v.western ? '（' + v.western + '）' : '');
+    const info = ['姓名：' + p.name, '性别：' + p.gender, '年龄：' + (p.id ? ageText(p) : ''), '日期：' + dOnly(v.date), v.type].concat(p.allergy ? ['过敏史：' + p.allergy] : [], v.pregnant ? ['妊娠期'] : []);
+    const before = mode === 'rx' ? [['诊断', dx], ['治法', v.method]]
+      : [['主诉', v.chief], ['现病史', v.hpi], ['既往史', p.history], ['四诊', [fourText(v), v.exam].filter(Boolean).join('；')], ['诊断', dx], ['治法', v.method]];
+    const n = v.rx.herbs.length;
+    const after = [['用法', n ? '共 ' + n + ' 味，' + v.rx.doses + ' 剂。' + v.rx.usage : ''], ['医嘱', v.advice]];
+    const render = ctx => {
+      let y = M;
+      const wrap = (text, maxW) => {
+        const lines = [];
+        String(text).split('\n').forEach(par => { let line = ''; for (const ch of par) { if (line && ctx.measureText(line + ch).width > maxW) { lines.push(line); line = ch; } else line += ch; } lines.push(line); });
+        return lines;
+      };
+      const rule = (h, color) => { ctx.fillStyle = color; ctx.fillRect(M, y, CW, h); ctx.fillStyle = '#000'; y += h; };
+      const kv = pair => {
+        if (!pair[1]) return;
+        y += 18;
+        ctx.font = 'bold 30px ' + SANS; ctx.fillText(pair[0], M, y);
+        ctx.font = '30px ' + SANS;
+        wrap(pair[1], CW - LW).forEach(l => { ctx.fillText(l, M + LW, y); y += 46; });
+        y += 12; rule(1, '#aaa');
+      };
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height); ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
+      ctx.textAlign = 'center';
+      ctx.font = '56px ' + KAI; ctx.fillText(s.clinic || '中医门诊', W / 2, y); y += 78;
+      ctx.font = '32px ' + SANS; ctx.fillText(mode === 'rx' ? '处  方  笺' : '门 诊 病 历', W / 2, y); y += 58;
+      ctx.textAlign = 'left'; rule(4, '#000'); y += 20;
+      ctx.font = '30px ' + SANS;
+      let x = M;
+      info.forEach(t => { const w = ctx.measureText(t).width; if (x > M && x + w > W - M) { x = M; y += 46; } ctx.fillText(t, x, y); x += w + 44; });
+      y += 46 + 14; rule(2, '#000');
+      before.forEach(kv);
+      if (n) {
+        y += 22; ctx.font = 'italic bold 52px Georgia,"Times New Roman",serif'; ctx.fillText('Rp.', M, y); y += 78;
+        const colW = (CW - 40) / 3;
+        v.rx.herbs.forEach((h, i) => {
+          const cx = M + 20 + (i % 3) * colW, cy = y + Math.floor(i / 3) * 62, t = h.name + ' ' + h.dose + h.unit;
+          ctx.font = '34px ' + SANS; ctx.fillText(t, cx, cy);
+          if (h.note) { const w = ctx.measureText(t).width; ctx.font = '22px ' + SANS; ctx.fillText(h.note, cx + w + 6, cy + 2); }
+        });
+        y += Math.ceil(n / 3) * 62 + 16; rule(1, '#aaa');
+      }
+      after.forEach(kv);
+      y += 48; ctx.font = '30px ' + SANS; ctx.fillText('医师：' + (s.doctor || '＿＿＿＿＿＿'), M, y);
+      return y + 46 + M;
+    };
+    const c0 = document.createElement('canvas'); c0.width = W; c0.height = 10;
+    const c = document.createElement('canvas'); c.width = W; c.height = Math.ceil(render(c0.getContext('2d')));
+    render(c.getContext('2d'));
+    return c;
+  }
+  function sheetImage(id, mode) {
+    const v = V(id); if (!v) return;
+    const c = drawSheet(v, mode), p = P(v.patientId) || { name: '' }, label = mode === 'rx' ? '处方笺' : '门诊病历';
+    c.toBlob(b => {
+      if (!b) { toast('生成图片失败', true); return; }
+      sheetFile = new File([b], (mode === 'rx' ? '处方_' : '病历_') + p.name + '_' + dOnly(v.date) + '.png', { type: 'image/png' });
+      let canShare = false;
+      try { canShare = !!(navigator.canShare && navigator.canShare({ files: [sheetFile] })); } catch (e) { /* 不支持分享文件 */ }
+      openModal('<h2>' + label + '图片</h2><img class="sheet-img" id="sheet-img" alt="' + label + '" src="' + c.toDataURL('image/png') + '"><p class="fine" style="margin-top:8px">手机上长按图片，可以直接发给微信好友或保存到相册。</p><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn' + (canShare ? '' : ' primary') + '" data-act="sheet-dl">保存到本机</button>' + (canShare ? '<button class="btn primary" data-act="sheet-share">分享（微信等）</button>' : '') + '</div>', true);
+    }, 'image/png');
   }
 
   /* ---------- 知识库 ---------- */
@@ -1077,6 +1146,16 @@
     print: el => printVisit(el.dataset.id, el.dataset.mode),
     export: exportData,
     'do-print': () => window.print(),
+    'sheet-img': el => sheetImage(el.dataset.id, el.dataset.mode),
+    'sheet-share': () => { if (sheetFile) navigator.share({ files: [sheetFile] }).catch(() => {}); },
+    'sheet-dl': () => {
+      if (!sheetFile) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(sheetFile); a.download = sheetFile.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast('图片已保存到下载文件夹');
+    },
     'lock-now': lockNow,
     'sync-form': syncForm,
     'sync-now': () => syncNow(true).then(ok => { toast(ok ? '同步完成' : syncMsg.msg || '同步失败', !ok); if (location.hash === '#settings' && modal.hidden) route(); }),
