@@ -850,7 +850,7 @@
       '<label class="f req"><span>私有仓库名</span><input type="text" name="repo" id="sync-repo" required></label>' +
       '<label class="f req"><span>访问令牌（以 github_pat_ 开头）</span><input type="password" name="token" id="sync-token" autocomplete="off" required></label>' +
       '<label class="f req"><span>密码</span><input type="password" name="pw" id="sync-pw" autocomplete="current-password" required></label>' +
-      '<p class="fine">第一台设备：填这台设备的密码。第二台设备：填第一台设备的密码，这台设备会改用同一个密码，本机的示例数据不会带到云端。上传的全部是密文，令牌只保存在本机并随数据一起加密。</p>' +
+      '<p class="fine">' + (cryptoKey ? '第一台设备：填这台设备的密码。第二台设备：填第一台设备的密码，这台设备会改用同一个密码。' : '这台设备还没有设密码，这里填的密码就会成为它的密码（至少 6 位）。如果另一台设备已经在同步，必须填和它相同的密码。忘记密码无法找回数据。') + '本机的示例数据不会带到云端。上传的全部是密文，令牌只保存在本机并随数据一起加密。</p>' +
       '</div><p class="lock-err" id="sync-err" role="alert"></p><div class="acts"><button type="button" class="btn" data-act="modal-close">取消</button><button class="btn primary">连接并同步</button></div></form>');
   }
   async function connectSync(form) {
@@ -870,11 +870,17 @@
         if (o.salt !== saltB64) { clearTimeout(saveTimer); await rekey(key, o.salt); phCache.clear(); }
         const dp = db.patients.filter(p => p.demo).map(p => p.id);
         db.visits = db.visits.filter(v => !v.demo && dp.indexOf(v.patientId) < 0); db.patients = db.patients.filter(p => !p.demo);
+      } else if (!cryptoKey) {
+        // 这台设备还没设密码，仓库也是空的：直接用填的密码加密本机数据
+        if (pw.length < 6) { err.textContent = '密码至少 6 位'; return; }
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        clearTimeout(saveTimer); await rekey(await deriveKey(pw, salt), b64(salt)); phCache.clear();
       } else {
         await saveChain;
         const ok = await deriveKey(pw, unb64(saltB64)).then(k => decStr(k, JSON.parse(localStorage.getItem(KEY)))).then(() => true, () => false);
         if (!ok) { err.textContent = '密码不正确'; return; }
       }
+      armIdle();
       db.sync = c; pwAsked = false; save(); closeModal(); route();
       const ok = await syncNow(true);
       toast(ok ? '同步已开启' : '设置已保存，但首次同步没有成功：' + syncMsg.msg, !ok);
@@ -885,8 +891,8 @@
   }
   function syncCard() {
     const c = db.sync;
-    return '<section class="card"><h2>多设备同步</h2>' + (!cryptoKey
-      ? '<p class="sub">同步会把加密后的数据存进你的 GitHub 私有仓库，让电脑和手机看到同一份病历。请先在上面设置密码，再开启同步。</p>'
+    return '<section class="card"><h2>多设备同步</h2>' + (!canCrypto
+      ? '<p class="sub">当前打开方式不支持加密，无法同步。请用 Chrome、Edge 或三星浏览器打开。</p>'
       : !c ? '<p class="sub">把加密后的数据存进你的 GitHub 私有仓库，让电脑和手机看到同一份病历。需要一个私有仓库和一个只能访问它的访问令牌。</p><div class="acts" style="margin-top:12px"><button class="btn primary" data-act="sync-form">开启同步</button></div>'
         : '<p>仓库 <b>' + esc(c.owner + '/' + c.repo) + '</b>　<span id="sync-status"' + (syncMsg.err ? ' class="allergy"' : '') + '>' + esc(syncMsg.msg) + '</span></p><p class="fine" style="margin-top:4px">上次成功同步：' + (c.lastSync ? dTime(c.lastSync) : '还没有') + '。保存病历后会自动同步，另外每 3 分钟检查一次。</p><div class="acts" style="margin-top:12px"><button class="btn" data-act="sync-now">立即同步</button><button class="btn danger" data-act="sync-off">断开同步</button></div>') + '</section>';
   }
