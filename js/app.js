@@ -413,10 +413,13 @@
       '<label class="f"><span>治法</span><input type="text" data-bind="method" id="c-method" value="' + esc(d.method) + '"></label>' +
       '<label class="f"><span>西医诊断</span><input type="text" data-bind="western" id="c-western" value="' + esc(d.western) + '"></label></div></section>' +
 
-      '<section class="card"><h2><span class="step">' + steps[3] + '</span>处方</h2><div class="rx-tools">' +
-      '<select id="fx-pick" aria-label="选择方剂">' + fxOptions() + '</select>' +
-      '<button type="button" class="btn" data-act="fx-pick" data-mode="replace">载入</button><button type="button" class="btn" data-act="fx-pick" data-mode="merge">合方</button><button type="button" class="btn" data-act="my-save">存为常用方</button>' +
-      '<input type="text" id="rx-quick" list="herb-list" placeholder="快速加药：黄芪 30 党参 15（回车添加）" aria-label="快速加药"></div>' +
+      '<section class="card"><h2><span class="step">' + steps[3] + '</span>处方</h2>' +
+      '<div class="rx-cmd"><input type="text" id="rx-quick" list="rx-list" enterkeyhint="done" autocomplete="off" placeholder="直接打字，回车生效。例：柴胡疏肝散 加 延胡索10 海螵蛸15 去 川芎" aria-label="输入方名或药物"><button type="button" class="btn primary" data-act="rx-go">确定</button></div>' +
+      '<datalist id="rx-list">' + fxNames().map(f => '<option value="' + esc(f.name) + '">').join('') + T.ALL_HERBS.map(h => '<option value="' + h + '">').join('') + '</datalist>' +
+      '<p class="fine" style="margin:6px 0 12px">可以写：<b>方名</b>（载入整方）、<b>合 方名</b>（合方）、<b>药名+剂量</b>（加药；药已在方里就是改剂量）、<b>去 药名</b>（删药）。也可以像例子那样一句写完。</p>' +
+      '<div class="rx-tools"><select id="fx-pick" aria-label="浏览方剂库">' + fxOptions() + '</select>' +
+      '<button type="button" class="btn" data-act="fx-pick" data-mode="replace">载入</button><button type="button" class="btn" data-act="fx-pick" data-mode="merge">合方</button>' +
+      '<button type="button" class="btn" data-act="rx-text">整方文本编辑</button><button type="button" class="btn" data-act="my-save">存为常用方</button><button type="button" class="btn" data-act="rx-undo">撤销</button><button type="button" class="btn danger" data-act="rx-clear">清空</button></div>' +
       '<label class="f" style="margin-bottom:10px"><span>方名</span><input type="text" data-bind="rx.formula" id="c-formula" placeholder="如：柴胡疏肝散加减" value="' + esc(d.rx.formula) + '"></label>' +
       '<div class="rx-grid" id="rx-body"></div><div class="rx-add" id="rx-add"></div>' +
       '<div class="rx-meta"><label>剂数<input type="number" min="1" max="60" data-bind="rx.doses" id="c-doses" value="' + d.rx.doses + '"></label><label class="use">用法<input type="text" data-bind="rx.usage" id="c-usage" value="' + esc(d.rx.usage) + '"></label><span class="rx-total" id="rx-total"></span></div>' +
@@ -455,7 +458,7 @@
       '<select data-hf="unit" id="h-unit-' + i + '" aria-label="单位">' + UNITS.map(u => '<option' + (u === h.unit ? ' selected' : '') + '>' + u + '</option>').join('') + '</select>' +
       '<select data-hf="note" id="h-note-' + i + '" aria-label="煎法">' + NOTES.map(n => '<option value="' + n + '"' + (n === h.note ? ' selected' : '') + '>' + (n || '—') + '</option>').join('') + '</select>' +
       '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除 ' + esc(h.name) + '">×</button></div>').join('')
-      : '<p class="empty" style="grid-column:1/-1">尚未开方。' + (useFour() ? '可从右侧辨证参考点方名载入，或在上方选方、快速加药。' : '在上方从方剂库选方，或用快速加药直接输入。') + '</p>';
+      : '<p class="empty" style="grid-column:1/-1">尚未开方。在上面的输入框里直接打方名或药物，回车即可' + (useFour() ? '；也可以从右侧辨证参考点方名载入' : '') + '。</p>';
     renderRxMeta();
   }
   function renderRxMeta() {
@@ -469,7 +472,7 @@
     const adds = hs.length && useFour() ? draft.symptoms.map(s => ({ s: s, hs: (T.ADDITIONS[s] || []).filter(h => names.indexOf(h.name) < 0) })).filter(x => x.hs.length).slice(0, 8) : [];
     $('#rx-add').innerHTML = adds.length ? '<span class="fine">随症加味参考（常用经验加味，须结合证型取舍；点击加入处方）</span>' + adds.map(x => '<div class="rx-add-row"><span class="sx-l">' + x.s + '</span><div class="chips">' + x.hs.map(h => '<button type="button" class="chip" data-act="add-herb" data-n="' + h.name + '" data-d="' + h.dose + '" data-note="' + h.note + '">+ ' + h.name + ' ' + h.dose + 'g</button>').join('') + '</div></div>').join('') : '';
   }
-  function loadFormula(name, mode) {
+  function loadFormula(name, mode, quiet) {
     const my = name.indexOf('my:') === 0 ? db.myFormulas.find(f => f.id === name.slice(3)) : null;
     const rx = draft.rx, hs = my ? clone(my.herbs) : T.formulaHerbs(name);
     if (my) name = my.name;
@@ -479,24 +482,88 @@
       rx.formula = rx.formula ? rx.formula.replace(/加减$/, '') + '合' + name : name;
     } else { rx.herbs = hs; rx.formula = name; }
     $('#c-formula').value = rx.formula;
+    if (quiet) return;
     renderRx(); queueSave(); toast((mode === 'merge' ? '已合入 ' : '已载入 ') + name);
   }
   function askFormula(name) {
     if (!draft.rx.herbs.length) { loadFormula(name, 'replace'); return; }
     openModal('<h2>载入 ' + esc(name) + '</h2><p>当前处方已有 ' + draft.rx.herbs.length + ' 味药。</p><div class="acts"><button class="btn" data-act="modal-close">取消</button><button class="btn" data-act="fx-load" data-fx="' + esc(name) + '" data-mode="merge">合方（追加不重复的药）</button><button class="btn primary" data-act="fx-load" data-fx="' + esc(name) + '" data-mode="replace">替换当前处方</button></div>');
   }
-  function quickAdd(text) {
-    const tokens = text.trim().split(/[\s,，、;；]+/).filter(Boolean), added = [];
-    tokens.forEach(t => {
-      const pure = /^(\d+(?:\.\d+)?)(g|克|枚|片)?$/i.exec(t);
-      if (pure) { if (added.length) { const h = added[added.length - 1]; h.dose = +pure[1]; if (pure[2] && pure[2] !== '克') h.unit = pure[2].toLowerCase(); } return; }
-      const m = /^(.+?)(\d+(?:\.\d+)?)(g|克|枚|片)?$/i.exec(t);
-      const name = m ? m[1] : t;
-      added.push({ name: name, dose: m ? +m[2] : '', unit: m && m[3] && m[3] !== '克' ? m[3].toLowerCase() : 'g', note: T.autoNote(name) });
-    });
-    if (!added.length) return;
-    added.forEach(h => draft.rx.herbs.push(h));
+  /* 处方的「直接打字」输入：方名、合方、加药、改剂量、去药，一句话里都能写 */
+  let rxUndo = null;
+  const snapRx = () => { rxUndo = clone(draft.rx); };
+  // 可识别的方名：我的常用方优先，其次方剂库和别称；名字长的排前面，避免「桂枝汤」抢在「桂枝加龙骨牡蛎汤」前面
+  function fxNames() {
+    return db.myFormulas.map(f => ({ name: f.name, key: 'my:' + f.id }))
+      .concat(T.FORMULAS.map(f => ({ name: f.name, key: f.name })), Object.keys(T.ALIAS || {}).map(a => ({ name: a, key: T.ALIAS[a] })))
+      .sort((a, b) => b.name.length - a.name.length);
+  }
+  const HERB_RE = /^([^\d\s()（）+＋]+)\s*(\d+(?:\.\d+)?)?\s*(g|克|枚|片)?\s*(?:[（(]\s*(先煎|后下|包煎|烊化|冲服|另煎|打碎)\s*[)）]|(先煎|后下|包煎|烊化|冲服|另煎|打碎))?/i;
+  // 从字符串开头读出一味药：返回 { len, herb }，读不出返回 null
+  function readHerb(s) {
+    const m = HERB_RE.exec(s); if (!m) return null;
+    let name = m[1], note = m[4] || m[5] || '';
+    if (!note && !m[2]) { const k = NOTES.find(x => x && name.length > x.length && name.endsWith(x)); if (k) { name = name.slice(0, -k.length); note = k; } }
+    return { len: m[0].length, hasUnit: !!m[3], herb: { name: name, dose: m[2] ? +m[2] : '', unit: m[3] && m[3] !== '克' ? m[3].toLowerCase() : 'g', note: note } };
+  }
+  const herbsToText = hs => hs.map(h => h.name + (h.dose === '' ? '' : h.dose) + (h.unit !== 'g' ? h.unit : '') + (h.note ? '(' + h.note + ')' : '')).join(' ');
+  function textToHerbs(text) {
+    const s = text.replace(/[，、；;,：:\n]/g, ' '), out = [];
+    let pos = 0;
+    while (pos < s.length) {
+      if (/[\s()（）+＋]/.test(s[pos])) { pos++; continue; }
+      const r = readHerb(s.slice(pos));
+      if (!r) { pos++; continue; }
+      pos += r.len;
+      if (!r.herb.note) r.herb.note = T.autoNote(r.herb.name);
+      out.push(r.herb);
+    }
+    return out;
+  }
+  function runRx(text) {
+    const s = text.replace(/[，、；;,：:]/g, ' ');
+    if (!s.trim()) return;
+    snapRx();
+    const rx = draft.rx, names = fxNames(), miss = [], unknown = [];
+    const formulaAt = i => names.find(f => s.startsWith(f.name, i));
+    let pos = 0, mode = 'add', loaded = 0, edited = false;
+    while (pos < s.length) {
+      const ch = s[pos];
+      if (/\s/.test(ch)) { pos++; continue; }
+      let f = formulaAt(pos), merge = false;
+      if (!f && ch === '合') { let j = pos + 1; while (s[j] === ' ') j++; f = formulaAt(j); if (f) { merge = true; pos = j; } }
+      if (f) {
+        // 一句话里的第一首方替换当前处方（除非写了「合」），后面的方一律合入
+        loadFormula(f.key, merge || loaded ? 'merge' : 'replace', true);
+        pos += f.name.length; loaded++; mode = 'add'; continue;
+      }
+      if (s.startsWith('加减', pos)) { pos += 2; mode = 'add'; continue; }
+      if (ch === '加' || ch === '+' || ch === '＋') { mode = 'add'; pos++; continue; }
+      if (ch === '去' || ch === '减' || ch === '-' || ch === '－') { mode = 'del'; pos++; continue; }
+      const r = readHerb(s.slice(pos));
+      if (!r) { pos++; continue; }
+      pos += r.len;
+      const h = r.herb;
+      if (mode === 'del') {
+        const n0 = rx.herbs.length;
+        rx.herbs = rx.herbs.filter(x => x.name !== h.name);
+        if (rx.herbs.length === n0) rx.herbs = rx.herbs.filter(x => x.name.indexOf(h.name) < 0);
+        if (rx.herbs.length === n0) miss.push(h.name); else edited = true;
+        continue;
+      }
+      // 没带剂量、又像方名的词：方剂库里没有这首方
+      if (h.dose === '' && h.name.length >= 3 && /(汤|散|丸|饮|饮子|煎|丹|方|膏)$/.test(h.name) && !/石膏$/.test(h.name)) { unknown.push(h.name); if (!rx.herbs.length) rx.formula = h.name; continue; }
+      const ex = rx.herbs.find(x => x.name === h.name);
+      if (ex) { if (h.dose !== '') ex.dose = h.dose; if (r.hasUnit) ex.unit = h.unit; if (h.note) ex.note = h.note; }
+      else { if (!h.note) h.note = T.autoNote(h.name); rx.herbs.push(h); }
+      edited = true;
+    }
+    // 只有在成方基础上动了药才补「加减」；自己起的方名不动
+    if (edited && rx.formula && !/加减$/.test(rx.formula) && names.some(f => rx.formula.indexOf(f.name) >= 0)) rx.formula += '加减';
+    $('#c-formula').value = rx.formula;
     renderRx(); queueSave();
+    if (unknown.length) toast('方剂库里没有「' + unknown.join('、') + '」' + (rx.herbs.length ? '' : '，已填为方名，请直接输入药物'), true);
+    else if (miss.length) toast('处方里没有：' + miss.join('、'), true);
   }
   function saveVisit(print) {
     const d = draft;
@@ -1120,8 +1187,17 @@
       queueSave();
       if (el.dataset.fx) askFormula(el.dataset.fx); else toast('已填入证型和治法');
     },
-    'fx-pick': el => { const name = $('#fx-pick').value; if (!name) { toast('请先选择方剂', true); return; } loadFormula(name, el.dataset.mode); },
-    'fx-load': el => { const fx = el.dataset.fx, mode = el.dataset.mode; closeModal(); loadFormula(fx, mode); },
+    'fx-pick': el => { const name = $('#fx-pick').value; if (!name) { toast('请先选择方剂', true); return; } snapRx(); loadFormula(name, el.dataset.mode); },
+    'fx-load': el => { const fx = el.dataset.fx, mode = el.dataset.mode; closeModal(); snapRx(); loadFormula(fx, mode); },
+    'rx-go': () => { const i = $('#rx-quick'); runRx(i.value); i.value = ''; i.focus(); },
+    'rx-clear': () => { if (!draft.rx.herbs.length && !draft.rx.formula) return; snapRx(); draft.rx.herbs = []; draft.rx.formula = ''; $('#c-formula').value = ''; renderRx(); queueSave(); toast('已清空，点「撤销」可以恢复'); },
+    'rx-undo': () => {
+      if (!rxUndo) { toast('没有可撤销的操作', true); return; }
+      const cur = clone(draft.rx); draft.rx = rxUndo; rxUndo = cur;
+      $('#c-formula').value = draft.rx.formula; $('#c-doses').value = draft.rx.doses; $('#c-usage').value = draft.rx.usage;
+      renderRx(); queueSave(); toast('已撤销（再点一次可恢复）');
+    },
+    'rx-text': () => openModal('<h2>整方文本编辑</h2><form id="rxtf" autocomplete="off"><label class="f"><span>一味药写「药名+剂量」，用空格或顿号隔开；煎法写在后面，如 石膏30先煎、阿胶9(烊化)</span><textarea name="t" id="rxt" rows="8" style="font-size:15px;line-height:1.9">' + esc(herbsToText(draft.rx.herbs)) + '</textarea></label><p class="fine" style="margin-top:8px">保存后会用这里的内容替换整张处方，可以随意增删、调换顺序。</p><div class="acts"><button type="button" class="btn" data-act="modal-close">取消</button><button class="btn primary">保存</button></div></form>', true),
     'rx-del': el => { draft.rx.herbs.splice(+el.dataset.i, 1); renderRx(); queueSave(); },
     advice: el => {
       const ta = $('#c-advice'), v = el.dataset.v;
@@ -1226,7 +1302,7 @@
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !modal.hidden) closeModal();
-    if (e.key === 'Enter' && e.target.id === 'rx-quick') { e.preventDefault(); quickAdd(e.target.value); e.target.value = ''; }
+    if (e.key === 'Enter' && e.target.id === 'rx-quick') { e.preventDefault(); runRx(e.target.value); e.target.value = ''; }
   });
   document.addEventListener('paste', e => {
     if (!draft || !modal.hidden || !e.clipboardData) return;
@@ -1239,6 +1315,11 @@
     else if (e.target.id === 'lockf') { e.preventDefault(); unlock(String(new FormData(e.target).get('pw'))); }
     else if (e.target.id === 'pwf') { e.preventDefault(); doPw(e.target); }
     else if (e.target.id === 'impf') { e.preventDefault(); decryptBackup(e.target); }
+    else if (e.target.id === 'rxtf') {
+      e.preventDefault(); snapRx();
+      draft.rx.herbs = textToHerbs(String(new FormData(e.target).get('t')));
+      closeModal(); renderRx(); queueSave(); toast('处方已更新，共 ' + draft.rx.herbs.length + ' 味');
+    }
     else if (e.target.id === 'syncf') { e.preventDefault(); connectSync(e.target); }
     else if (e.target.id === 'syncpwf') { e.preventDefault(); adoptSyncPw(e.target); }
   });

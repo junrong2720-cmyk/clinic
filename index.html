@@ -168,6 +168,8 @@ table.stat .num{text-align:right}
 .sg-act{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .fine{font-size:12px;color:var(--ink3);line-height:1.6}
 
+.rx-cmd{display:flex;gap:8px}
+.rx-cmd input{flex:1 1 auto;width:auto;padding:9px 12px;font-size:15px}
 .rx-tools{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .rx-tools select{width:auto;flex:1 1 180px}
 .rx-tools input{flex:2 1 240px;width:auto}
@@ -287,7 +289,8 @@ table.stat .num{text-align:right}
 <div id="print" class="sheet"></div>
 <datalist id="herb-list"></datalist>
 <datalist id="disease-list"></datalist>
-<script src="js/data.js"></script>
-<script src="js/app.js"></script>
+<!-- 每次更新程序时把 v 改掉，保证两个文件一起刷新，不会新旧混用 -->
+<script src="js/data.js?v=20261117d"></script>
+<script src="js/app.js?v=20261117d"></script>
 </body>
 </html>
