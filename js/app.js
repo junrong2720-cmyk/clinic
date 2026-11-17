@@ -1,4 +1,4 @@
-/* 中医诊疗系统 · 主程序（纯前端，数据存于浏览器 localStorage） */
+/* 中医诊疗系统 · 主程序（纯前端，数据存于浏览器 IndexedDB，可选加密同步到 GitHub 私有仓库） */
 (function () {
   'use strict';
   const T = window.TCM;
@@ -25,7 +25,9 @@
   let locked = null;                       // 数据已加密但尚未解锁时，这里放密文对象
   let cryptoKey = null, saltB64 = null;    // 解锁后的密钥（只在内存里，密码本身不保存）
   let saveChain = Promise.resolve();
-  let db = load();
+  let booted = false;                      // 读完本机数据之前，绝不能保存（否则会用空数据覆盖）
+  let useLS = false;                       // IndexedDB 不可用时退回 localStorage（容量小，约 5MB）
+  let db = emptyDb();
   let draft = null;
   let pendingYes = null;
 
@@ -49,19 +51,38 @@
   function touch(o) { o.u = Date.now(); queueSync(2500); return o; }
   function bury(id) { (db.tomb || (db.tomb = {}))[id] = Date.now(); queueSync(2500); }
 
-  function load() {
+  // 启动：从 IndexedDB 读出本机数据；旧版本存在 localStorage 里的，第一次打开时搬过来
+  async function boot() {
+    let raw = null;
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) { const d = JSON.parse(raw); if (d && d.enc && d.ct) { locked = d; return emptyDb(); } if (d && Array.isArray(d.patients) && Array.isArray(d.visits)) { d.settings = d.settings || {}; d.myFormulas = d.myFormulas || []; d.tomb = d.tomb || {}; return d; } }
-    } catch (e) { storageBroken = true; /* 存储不可用时退回示例数据 */ }
-    return seed();
+      raw = await kv.get('db');
+      if (raw == null) {
+        let old = null;
+        try { old = localStorage.getItem(KEY); } catch (e) { /* 读不到就当没有 */ }
+        if (old) { await kv.put('db', old); raw = old; try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ } }
+      }
+    } catch (e) {
+      useLS = true;
+      try { raw = localStorage.getItem(KEY); } catch (e2) { storageBroken = true; }
+    }
+    db = seed();
+    try {
+      const d = raw ? JSON.parse(raw) : null;
+      if (d && d.enc && d.ct) { locked = d; db = emptyDb(); }
+      else if (d && Array.isArray(d.patients) && Array.isArray(d.visits)) { d.settings = d.settings || {}; d.myFormulas = d.myFormulas || []; d.tomb = d.tomb || {}; db = d; }
+    } catch (e) { /* 数据损坏时用示例数据启动 */ }
+    booted = true;
+    if (locked) showLock(); else route();
   }
+  // 本机保存着的那份数据（加密时是密文），用来核对密码
+  const storedBlob = () => saveChain.then(() => useLS ? localStorage.getItem(KEY) : kv.get('db')).then(raw => JSON.parse(raw));
   function save() {
-    if (locked) return;   // 未解锁时内存里是空壳，绝不能覆盖密文
-    const json = JSON.stringify(db), fail = () => toast('保存失败：浏览器存储不可用或已满', true);
-    if (!cryptoKey) { try { localStorage.setItem(KEY, json); } catch (e) { fail(); } return; }
-    const key = cryptoKey, salt = saltB64;
-    saveChain = saveChain.then(() => encStr(key, json)).then(o => localStorage.setItem(KEY, JSON.stringify({ enc: 1, salt: salt, iv: o.iv, ct: o.ct }))).catch(fail);
+    if (!booted || locked) return;   // 未读完或未解锁时内存里是空壳，绝不能覆盖已有数据
+    const json = JSON.stringify(db), key = cryptoKey, salt = saltB64;
+    saveChain = saveChain
+      .then(() => key ? encStr(key, json).then(o => JSON.stringify({ enc: 1, salt: salt, iv: o.iv, ct: o.ct })) : json)
+      .then(val => useLS ? localStorage.setItem(KEY, val) : kv.put('db', val))
+      .catch(() => toast('保存失败：浏览器存储不可用或已满', true));
   }
   let saveTimer = 0;
   function queueSave() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
@@ -182,19 +203,22 @@
   /* ---------- 舌象照片（压缩后存 IndexedDB，病历里只记编号） ---------- */
   const MAX_PHOTOS = 6;
   const phCache = new Map();
-  const idb = (function () {
+  // 一个 IndexedDB 仓库：照片放 tcm-clinic/photos，病历数据放 tcm-clinic-data/kv
+  function mkStore(dbName, storeName) {
     let opened;
     const open = () => opened || (opened = new Promise((res, rej) => {
-      const r = indexedDB.open('tcm-clinic', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('photos');
-      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      const r = indexedDB.open(dbName, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(storeName);
+      r.onsuccess = () => res(r.result); r.onerror = () => { opened = null; rej(r.error); };
     }));
     const tx = (mode, fn) => open().then(d => new Promise((res, rej) => {
-      const t = d.transaction('photos', mode), q = fn(t.objectStore('photos'));
+      const t = d.transaction(storeName, mode), q = fn(t.objectStore(storeName));
       t.oncomplete = () => res(q.result); t.onerror = t.onabort = () => rej(t.error);
     }));
     return { put: (id, v) => tx('readwrite', s => s.put(v, id)), get: id => tx('readonly', s => s.get(id)), del: id => tx('readwrite', s => s.delete(id)), keys: () => tx('readonly', s => s.getAllKeys()) };
-  })();
+  }
+  const idb = mkStore('tcm-clinic', 'photos');
+  const kv = mkStore('tcm-clinic-data', 'kv');
   const phPut = (id, url) => cryptoKey ? encStr(cryptoKey, url).then(o => idb.put(id, { enc: 1, iv: o.iv, ct: o.ct })) : idb.put(id, url);
   const phGet = id => idb.get(id).then(v => v && v.enc ? decStr(cryptoKey, v) : v);
   // 换密钥（设置 / 修改 / 取消密码）：先用旧密钥读出全部照片，再用新密钥写回
@@ -879,8 +903,7 @@
     err.textContent = '正在处理，请稍候…';
     try {
       if (mode !== 'set') {
-        await saveChain;
-        const ok = await deriveKey(cur, unb64(saltB64)).then(k => decStr(k, JSON.parse(localStorage.getItem(KEY)))).then(() => true, () => false);
+        const ok = await Promise.all([deriveKey(cur, unb64(saltB64)), storedBlob()]).then(x => decStr(x[0], x[1])).then(() => true, () => false);
         if (!ok) { err.textContent = '当前密码不正确'; return; }
       }
       if (db.sync && mode === 'remove') { err.textContent = '已开启同步，请先断开同步再取消密码'; return; }
@@ -900,96 +923,172 @@
   }
 
   /* ---------- 多设备同步：GitHub 私有仓库，只上传密文 ----------
-   * 仓库里的文件：data.json（全部病历的密文）和 photos/<照片编号>.<密钥标记>.json（每张照片的密文）。
-   * 合并规则：按记录编号取并集，同一条记录以修改时间较晚的为准；删除靠 tomb 标记传播。 */
+   * 仓库结构（第 2 版）：
+   *   v2/meta.json                设置和删除记录（加密），带密钥标记 salt
+   *   v2/r/<编号>.<修改时间>.json   每份病历 / 患者 / 常用方各一个加密文件；文件名带修改时间，看目录就知道哪份变了
+   *   photos/<编号>.<密钥标记>.json 每张照片一个加密文件
+   * 每次同步只提交改动过的文件，并且合成一次提交，仓库不会因为病历变多而越涨越快。
+   * 旧版的 data.json（全部病历一个大文件）会被读出、合并后删除。
+   * 合并规则：同一份记录以修改时间较晚的为准；删除靠 tomb 标记传播。 */
   const SHARED = ['clinic', 'doctor', 'showFour', 'autoLock', 'u'];
+  const RDIR = 'v2/r/', META = 'v2/meta.json', PDIR = 'photos/', LEGACY = 'data.json';
   const stamp = r => r.u || Date.parse(r.createdAt || r.date || '') || 0;
-  function payloadOf(d) {
-    const s = {};
-    SHARED.forEach(k => { if (d.settings[k] !== undefined) s[k] = d.settings[k]; });
-    return { settings: s, myFormulas: d.myFormulas, patients: d.patients, visits: d.visits, tomb: d.tomb || {} };
-  }
-  function mergePayload(remote, local) {
-    const tomb = Object.assign({}, remote.tomb || {});
-    Object.keys(local.tomb).forEach(k => { if (!(tomb[k] >= local.tomb[k])) tomb[k] = local.tomb[k]; });
-    // 云端在前：时间相同以云端为准，否则两台设备会互相覆盖个没完
-    const list = (a, b) => { const m = new Map(); (a || []).concat(b).forEach(r => { const o = m.get(r.id); if (!o || stamp(r) > stamp(o)) m.set(r.id, r); }); return Array.from(m.values()).filter(r => !(tomb[r.id] >= stamp(r))); };
-    const rs = remote.settings || {};
-    return { settings: (local.settings.u || 0) > (rs.u || 0) ? local.settings : rs, myFormulas: list(remote.myFormulas, local.myFormulas), patients: list(remote.patients, local.patients), visits: list(remote.visits, local.visits), tomb: tomb };
-  }
+  const pickShared = st => { const o = {}; SHARED.forEach(k => { if (st && st[k] !== undefined) o[k] = st[k]; }); return o; };
+  function payloadOf(d) { return { settings: pickShared(d.settings), myFormulas: d.myFormulas, patients: d.patients, visits: d.visits, tomb: d.tomb || {} }; }
   function canon(p) {
     const by = a => a.slice().sort((x, y) => (x.id < y.id ? -1 : 1)), t = {};
     Object.keys(p.tomb).sort().forEach(k => { t[k] = p.tomb[k]; });
     return JSON.stringify({ s: SHARED.map(k => p.settings[k]), f: by(p.myFormulas), p: by(p.patients), v: by(p.visits), t: t });
   }
-  function ghFetch(c, path, opt, raw) {
-    opt = opt || {};
-    const url = 'https://api.github.com/repos/' + encodeURIComponent(c.owner) + '/' + encodeURIComponent(c.repo) + (path == null ? '' : '/contents/' + path);
-    return fetch(url, { method: opt.method || 'GET', cache: 'no-store', body: opt.body ? JSON.stringify(opt.body) : undefined,
-      headers: { Authorization: 'Bearer ' + c.token, Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } })
-      .then(res => { if (res.status === 401 || res.status === 403) throw { code: 'auth' }; return res; }, () => { throw { code: 'net' }; });
-  }
-  async function ghGet(c, path) {
-    const res = await ghFetch(c, path);
+  const canonMeta = m => canon({ settings: pickShared(m.settings), tomb: m.tomb || {}, myFormulas: [], patients: [], visits: [] });
+  async function api(c, method, path, body) {
+    let res;
+    try {
+      res = await fetch('https://api.github.com/repos/' + encodeURIComponent(c.owner) + '/' + encodeURIComponent(c.repo) + path, {
+        method: method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
+        headers: { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+    } catch (e) { throw { code: 'net' }; }
+    if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') throw { code: 'rate' };
+    if (res.status === 401 || res.status === 403) throw { code: 'auth' };
     if (res.status === 404) return null;
+    if (res.status === 409 || res.status === 422) throw { code: 'conflict', status: res.status };
     if (!res.ok) throw { code: 'http', status: res.status };
-    const j = await res.json();
-    if (Array.isArray(j)) return j;
-    return { sha: j.sha, text: j.content ? atob(j.content.replace(/\s/g, '')) : await (await ghFetch(c, path, null, true)).text() };
+    return res.json();
   }
-  async function ghPut(c, path, text, sha) {
-    const body = { message: 'sync', content: btoa(text) };
-    if (sha) body.sha = sha;
-    const res = await ghFetch(c, path, { method: 'PUT', body: body });
-    if (res.status === 409 || res.status === 422) throw { code: 'conflict' };
-    if (!res.ok) throw { code: 'http', status: res.status };
+  async function pool(items, n, fn) {
+    let i = 0;
+    const run = async () => { while (i < items.length) await fn(items[i++]); };
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, run));
   }
-  async function ghDel(c, path, sha) {
-    const res = await ghFetch(c, path, { method: 'DELETE', body: { message: 'sync: remove', sha: sha } });
-    if (!res.ok && res.status !== 404 && res.status !== 409) throw { code: 'http', status: res.status };
+  // 远端读取的缓存：没变就不重复下载，空闲时一次同步只需问一次 GitHub
+  const ghCache = { commit: null, tree: null, list: null, metaSha: null, metaSalt: null, meta: null };
+  const blobText = (c, sha) => api(c, 'GET', '/git/blobs/' + sha).then(b => { if (!b) throw { code: 'http', status: 404 }; return atob(b.content.replace(/\s/g, '')); });
+  async function readHead(c) {
+    const ref = await api(c, 'GET', '/git/ref/heads/' + (c.branch || 'main')).catch(e => { throw e.code === 'conflict' ? { code: 'empty' } : e; });
+    if (!ref) throw { code: 'empty' };
+    const head = ref.object.sha;
+    if (ghCache.commit !== head) {
+      const cm = await api(c, 'GET', '/git/commits/' + head);
+      ghCache.commit = head; ghCache.tree = cm.tree.sha; ghCache.list = null;
+    }
+    if (!ghCache.list) {
+      const t = await api(c, 'GET', '/git/trees/' + ghCache.tree + '?recursive=1');
+      if (!t || t.truncated) throw { code: 'http', status: 'tree' };
+      ghCache.list = t.tree;
+    }
+    return { head: head, tree: ghCache.tree, list: ghCache.list };
+  }
+  // 仓库里已有数据时，拿到它的加密对象（用来核对密码）；没有数据返回 null
+  async function remoteAnchor(c) {
+    const h = await readHead(c), e = h.list.find(x => x.path === META) || h.list.find(x => x.path === LEGACY);
+    return e ? JSON.parse(await blobText(c, e.sha)) : null;
   }
   async function syncCore() {
-    const c = db.sync, tag = saltB64.replace(/[^A-Za-z0-9]/g, '').slice(0, 10);
-    const file = await ghGet(c, 'data.json');
-    let remote = null;
-    if (file) {
-      const o = JSON.parse(file.text);
-      if (o.salt === saltB64) remote = JSON.parse(await decStr(cryptoKey, o).catch(() => { throw { code: 'pw', remote: o }; }));
-      else if (!c.forcePush) throw { code: 'pw', remote: o };
-    }
-    const local = payloadOf(db), merged = remote ? mergePayload(remote, local) : local, mj = canon(merged);
-    let changed = false;
-    if (mj !== canon(local)) {
-      db.myFormulas = merged.myFormulas; db.patients = merged.patients; db.visits = merged.visits; db.tomb = merged.tomb;
-      SHARED.forEach(k => { if (merged.settings[k] !== undefined) db.settings[k] = merged.settings[k]; });
-      if (db.draft && !P(db.draft.patientId)) db.draft = null;
-      changed = true;
-    }
-    if (!remote || mj !== canon(remote)) {
-      const o = await encStr(cryptoKey, JSON.stringify(merged));
-      await ghPut(c, 'data.json', JSON.stringify({ v: 1, salt: saltB64, iv: o.iv, ct: o.ct }), file && file.sha);
-    }
-    delete c.forcePush;
-    // 照片：云端缺的上传，本机缺的下载，没有病历引用的从云端删除
-    const listing = (await ghGet(c, 'photos')) || [];
-    const remoteMap = new Map((Array.isArray(listing) ? listing : []).map(f => [f.name, f.sha]));
-    const need = new Set(merged.visits.flatMap(v => (v.photos || []).map(p => p.id)));
-    const have = new Set(await idb.keys().catch(() => []));
-    let got = 0;
-    for (const id of need) {
-      const name = id + '.' + tag + '.json';
-      if (remoteMap.has(name)) {
-        if (!have.has(id)) { const f = await ghGet(c, 'photos/' + name); if (f) { const o = JSON.parse(f.text); await idb.put(id, { enc: 1, iv: o.iv, ct: o.ct }); got++; } }
-      } else if (have.has(id)) {
-        const v = await idb.get(id);
-        if (v && v.enc) await ghPut(c, 'photos/' + name, JSON.stringify({ iv: v.iv, ct: v.ct }));
+    const c = db.sync, force = !!c.forcePush, tag = saltB64.replace(/[^A-Za-z0-9]/g, '').slice(0, 10);
+    const h = await readHead(c);
+    // 1. 看清云端有什么
+    let metaE = null, legacyE = null;
+    const recs = new Map(), stale = [], photos = new Map();
+    h.list.forEach(e => {
+      if (e.type !== 'blob') return;
+      if (e.path === META) metaE = e;
+      else if (e.path === LEGACY) legacyE = e;
+      else if (e.path.indexOf(RDIR) === 0) {
+        const m = /^v2\/r\/([^/]+)\.(\d+)\.json$/.exec(e.path); if (!m) return;
+        const cur = recs.get(m[1]), x = { u: +m[2], path: e.path, sha: e.sha };
+        if (!cur || x.u > cur.u) { if (cur) stale.push(cur.path); recs.set(m[1], x); } else stale.push(e.path);
+      } else if (e.path.indexOf(PDIR) === 0) photos.set(e.path.slice(PDIR.length), e);
+    });
+    let rmeta = null;
+    if (metaE) {
+      if (ghCache.metaSha === metaE.sha && ghCache.metaSalt === saltB64) rmeta = ghCache.meta;
+      else {
+        const o = JSON.parse(await blobText(c, metaE.sha));
+        if (o.salt === saltB64) {
+          rmeta = JSON.parse(await decStr(cryptoKey, o).catch(() => { throw { code: 'pw', remote: o }; }));
+          ghCache.metaSha = metaE.sha; ghCache.metaSalt = saltB64; ghCache.meta = rmeta;
+        } else if (!force) throw { code: 'pw', remote: o };
       }
     }
-    for (const e of remoteMap) {
-      const id = e[0].split('.')[0];
-      if (!need.has(id) || e[0] !== id + '.' + tag + '.json') await ghDel(c, 'photos/' + e[0], e[1]);
+    let legacy = null;   // 旧版大文件：读出来合并，然后删掉
+    if (legacyE) {
+      const o = JSON.parse(await blobText(c, legacyE.sha));
+      if (o.salt === saltB64) legacy = JSON.parse(await decStr(cryptoKey, o).catch(() => 'null'));
+      else if (!metaE && !force) throw { code: 'pw', remote: o };
     }
+    // 2. 合并删除记录和设置
+    const local = payloadOf(db), tomb = Object.assign({}, local.tomb);
+    [rmeta, legacy].forEach(x => Object.keys((x && x.tomb) || {}).forEach(k => { if (!(tomb[k] >= x.tomb[k])) tomb[k] = x.tomb[k]; }));
+    let settings = local.settings;
+    [rmeta, legacy].forEach(x => { if (x && x.settings && (x.settings.u || 0) > (settings.u || 0)) settings = pickShared(x.settings); });
+    // 3. 合并记录：本机的 + 旧大文件里的 + 云端比本机新的
+    const idx = new Map();
+    const take = (k, r) => { const cur = idx.get(r.id); if (!cur || stamp(r) > stamp(cur.r)) idx.set(r.id, { k: k, r: r }); };
+    local.patients.forEach(r => take('p', r)); local.visits.forEach(r => take('v', r)); local.myFormulas.forEach(r => take('f', r));
+    if (legacy) { (legacy.patients || []).forEach(r => take('p', r)); (legacy.visits || []).forEach(r => take('v', r)); (legacy.myFormulas || []).forEach(r => take('f', r)); }
+    const want = [], unreadable = new Set();
+    recs.forEach((e, id) => { if (tomb[id] >= e.u) return; const cur = idx.get(id); if (!cur || stamp(cur.r) < e.u) want.push([id, e]); });
+    await pool(want, 6, async x => {
+      try { const o = JSON.parse(await blobText(c, x[1].sha)); const d = JSON.parse(await decStr(cryptoKey, o)); take(d.k, d.r); }
+      catch (err) { if (err && err.code && err.code !== 'http') throw err; unreadable.add(x[0]); }
+    });
+    const out = { p: [], v: [], f: [] };
+    idx.forEach((x, id) => { if (!(tomb[id] >= stamp(x.r))) out[x.k].push(x.r); });
+    // 4. 算出要上传、要删除的文件
+    const entries = new Map();
+    const put = (path, content) => entries.set(path, { path: path, mode: '100644', type: 'blob', content: content });
+    const del = path => entries.set(path, { path: path, mode: '100644', type: 'blob', sha: null });
+    const keep = new Set();
+    for (const k of ['p', 'v', 'f']) for (const r of out[k]) {
+      keep.add(r.id);
+      const e = recs.get(r.id), u = stamp(r), path = RDIR + r.id + '.' + u + '.json';
+      if (e && e.u === u && !force) continue;
+      const o = await encStr(cryptoKey, JSON.stringify({ k: k, r: r }));
+      put(path, JSON.stringify({ iv: o.iv, ct: o.ct }));
+      if (e && e.path !== path) del(e.path);
+    }
+    recs.forEach((e, id) => { if (!keep.has(id) && !unreadable.has(id)) del(e.path); });
+    stale.forEach(del);
+    const meta = { settings: settings, tomb: tomb };
+    if (force || !rmeta || canonMeta(meta) !== canonMeta(rmeta)) {
+      const o = await encStr(cryptoKey, JSON.stringify(meta));
+      put(META, JSON.stringify({ v: 2, salt: saltB64, iv: o.iv, ct: o.ct }));
+    }
+    if (legacyE && legacy) del(LEGACY);
+    // 照片：云端缺的上传，本机缺的下载，没有病历引用的从云端删除
+    const need = new Set(out.v.flatMap(v => (v.photos || []).map(p => p.id)));
+    const have = new Set(await idb.keys().catch(() => []));
+    let got = 0;
+    await pool(Array.from(need), 4, async id => {
+      const name = id + '.' + tag + '.json', e = photos.get(name);
+      if (e) { if (!have.has(id)) { const o = JSON.parse(await blobText(c, e.sha)); await idb.put(id, { enc: 1, iv: o.iv, ct: o.ct }); got++; } }
+      else if (have.has(id)) { const v = await idb.get(id); if (v && v.enc) put(PDIR + name, JSON.stringify({ iv: v.iv, ct: v.ct })); }
+    });
+    if (!unreadable.size) photos.forEach((e, name) => { const id = name.split('.')[0]; if (!need.has(id) || name !== id + '.' + tag + '.json') del(e.path); });
+    // 5. 先更新本机，再把改动合成一次提交（别的设备抢先提交时 PATCH 返回 422，整个同步重来一次）
+    const merged = { settings: settings, myFormulas: out.f, patients: out.p, visits: out.v, tomb: tomb };
+    const changed = canon(merged) !== canon(local);
+    if (changed) {
+      db.myFormulas = out.f; db.patients = out.p; db.visits = out.v; db.tomb = tomb;
+      SHARED.forEach(k => { if (settings[k] !== undefined) db.settings[k] = settings[k]; });
+      if (db.draft && !P(db.draft.patientId)) db.draft = null;
+    }
+    if (entries.size) {
+      let base = h.tree, chunk = [], size = 0;
+      const flush = async () => { if (chunk.length) base = (await api(c, 'POST', '/git/trees', { base_tree: base, tree: chunk })).sha; chunk = []; size = 0; };
+      for (const e of entries.values()) {
+        const n = (e.content || '').length + 200;
+        if (chunk.length && (chunk.length >= 100 || size + n > 1500000)) await flush();
+        chunk.push(e); size += n;
+      }
+      await flush();
+      const cm = await api(c, 'POST', '/git/commits', { message: 'sync', tree: base, parents: [h.head] });
+      await api(c, 'PATCH', '/git/refs/heads/' + (c.branch || 'main'), { sha: cm.sha });
+      ghCache.commit = cm.sha; ghCache.tree = base; ghCache.list = null;
+    }
+    delete c.forcePush;
     c.lastSync = Date.now();
+    c.unreadable = unreadable.size;
     save();
     if (changed && !draft && modal.hidden) route(); else if (got) hydratePhotos(main);
   }
@@ -1006,9 +1105,13 @@
     if (navigator.onLine === false) { setSync('离线，联网后自动同步', true); return Promise.resolve(false); }
     setSync('正在同步…');
     const run = n => syncCore().catch(e => { if (e && e.code === 'conflict' && n > 0) return run(n - 1); throw e; });
-    syncing = run(2).then(() => { const t = new Date(); setSync('已同步 ' + pad(t.getHours()) + ':' + pad(t.getMinutes())); return true; }, e => {
+    syncing = run(2).then(() => {
+      const t = new Date(), bad = db.sync && db.sync.unreadable;
+      setSync('已同步 ' + pad(t.getHours()) + ':' + pad(t.getMinutes()) + (bad ? '（' + bad + ' 份云端记录无法解密）' : ''), !!bad); return true;
+    }, e => {
       const code = e && e.code;
       setSync(code === 'auth' ? '同步失败：访问令牌无效、过期或权限不足' : code === 'net' ? '同步失败：连不上 GitHub' : code === 'pw' ? '同步暂停：云端数据的密码与本机不同'
+        : code === 'rate' ? '同步暂停：GitHub 访问次数超限，稍后自动重试' : code === 'empty' ? '同步失败：仓库是空的，请先在仓库里建一个 README 文件'
         : code === 'http' && e.status === 404 ? '同步失败：找不到仓库，或令牌没有读写权限' : '同步失败，稍后自动重试', true);
       if (code === 'pw' && modal.hidden && (manual || !pwAsked)) { pwAsked = true; askSyncPw(e.remote); }
       return false;
@@ -1048,11 +1151,12 @@
     if (!c.owner || !c.repo || !c.token) { err.textContent = '请把三项都填上'; return; }
     err.textContent = '正在连接…';
     try {
-      const repo = await ghFetch(c, null);
-      if (!repo.ok) { err.textContent = '找不到这个仓库，或令牌无权访问它'; return; }
-      const file = await ghGet(c, 'data.json');
-      if (file) {
-        const o = JSON.parse(file.text);
+      const repo = await api(c, 'GET', '');
+      if (!repo) { err.textContent = '找不到这个仓库，或令牌无权访问它'; return; }
+      c.branch = repo.default_branch || 'main';
+      ghCache.commit = null;
+      const o = await remoteAnchor(c);
+      if (o) {
         let key;
         try { key = await deriveKey(pw, unb64(o.salt)); await decStr(key, o); }
         catch (e) { err.textContent = '密码不对：仓库里已有数据，需要填另一台设备上使用的密码'; return; }
@@ -1065,8 +1169,7 @@
         const salt = crypto.getRandomValues(new Uint8Array(16));
         clearTimeout(saveTimer); await rekey(await deriveKey(pw, salt), b64(salt)); phCache.clear();
       } else {
-        await saveChain;
-        const ok = await deriveKey(pw, unb64(saltB64)).then(k => decStr(k, JSON.parse(localStorage.getItem(KEY)))).then(() => true, () => false);
+        const ok = await Promise.all([deriveKey(pw, unb64(saltB64)), storedBlob()]).then(x => decStr(x[0], x[1])).then(() => true, () => false);
         if (!ok) { err.textContent = '密码不正确'; return; }
       }
       armIdle();
@@ -1075,7 +1178,7 @@
       toast(ok ? '同步已开启' : '设置已保存，但首次同步没有成功：' + syncMsg.msg, !ok);
       if (location.hash === '#settings' && modal.hidden) route();
     } catch (e) {
-      err.textContent = e && e.code === 'auth' ? '访问令牌无效、过期或权限不足' : e && e.code === 'net' ? '连不上 GitHub，请检查网络' : '连接失败，请重试';
+      err.textContent = e && e.code === 'auth' ? '访问令牌无效、过期或权限不足' : e && e.code === 'net' ? '连不上 GitHub，请检查网络' : e && e.code === 'empty' ? '这个仓库是空的，请先在仓库里建一个 README 文件' : '连接失败，请重试';
     }
   }
   function syncCard() {
@@ -1306,6 +1409,7 @@
     'pw-form': el => pwForm(el.dataset.mode),
     forgot: () => confirmBox('忘记密码', '<p>密码没有保存在任何地方，无法找回或重置，加密的数据也无法解开。</p><p>如果你有备份文件（未加密的，或记得当时密码的），可以清除本机数据后，到「设置与备份」里从备份恢复。</p><p><b>清除后，这台电脑这个浏览器里的全部病历和照片将永久删除。</b></p>', '清除本机全部数据', () => {
       try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ }
+      kv.del('db').catch(() => {});
       idb.keys().then(ks => Promise.all(ks.map(k => idb.del(k)))).catch(() => {}).then(() => location.reload());
     }, true),
     'photo-view': el => viewPhoto(el.dataset.id),
@@ -1426,7 +1530,7 @@
   }
   window.TCMApp = { diagnose: diagnose, checkRx: checkRx, selfCheck: selfCheck, db: () => db, encrypted: () => !!cryptoKey };
 
-  if (locked) showLock(); else route();
+  boot();
   // 放到网上（https）后启用离线支持；本地双击或 localhost 预览时不启用
   if (location.protocol === 'https:' && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
