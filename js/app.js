@@ -460,11 +460,14 @@
       '<input type="text" inputmode="decimal" data-hf="dose" id="h-dose-' + i + '" enterkeyhint="next" autocomplete="off" aria-label="剂量" placeholder="' + (blank ? '剂量' : '') + '" value="' + h.dose + '">' +
       '<select data-hf="unit" id="h-unit-' + i + '" aria-label="单位">' + UNITS.map(u => '<option' + (u === h.unit ? ' selected' : '') + '>' + u + '</option>').join('') + '</select>' +
       '<select data-hf="note" id="h-note-' + i + '" aria-label="煎法">' + NOTES.map(n => '<option value="' + n + '"' + (n === h.note ? ' selected' : '') + '>' + (n || '煎法') + '</option>').join('') + '</select>' +
-      (blank ? '<span></span>' : '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除 ' + esc(h.name) + '">×</button>') + '</div>';
+      (blank ? '<span></span><span></span>' : rowBtns(i, h.name)) + '</div>';
   }
+  const rowBtns = (i, name) => '<button type="button" class="x add" data-act="rx-ins" data-i="' + i + '" aria-label="在下面插入一味药">+</button><button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除 ' + esc(name || '') + '">×</button>';
+  let rxKeep = -1;   // 刚用「+」插入的空行，渲染时不要当作空行清掉
   function renderRx() {
     const el = $('#rx-body'); if (!el || !draft) return;
-    draft.rx.herbs = draft.rx.herbs.filter(h => h.name.trim() || h.dose !== '');
+    draft.rx.herbs = draft.rx.herbs.filter((h, i) => h.name.trim() || h.dose !== '' || i === rxKeep);
+    rxKeep = -1;
     el.innerHTML = draft.rx.herbs.map(rxRow).join('') + rxRow(null, 'new');
     renderRxMeta();
   }
@@ -475,7 +478,8 @@
     row.dataset.i = i; row.classList.remove('blank');
     row.querySelector('.n').textContent = i + 1;
     row.querySelectorAll('[id]').forEach(e => { e.id = e.id.replace(/-new$/, '-' + i); e.placeholder = ''; });
-    row.lastElementChild.outerHTML = '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除">×</button>';
+    row.lastElementChild.remove(); row.lastElementChild.remove();
+    row.insertAdjacentHTML('beforeend', rowBtns(i));
     row.insertAdjacentHTML('afterend', rxRow(null, 'new'));
     return draft.rx.herbs[i];
   }
@@ -1230,6 +1234,12 @@
       renderRx(); queueSave(); toast('已撤销（再点一次可恢复）');
     },
     'rx-text': () => openModal('<h2>整方文本编辑</h2><form id="rxtf" autocomplete="off"><label class="f"><span>一味药写「药名+剂量」，用空格或顿号隔开；煎法写在后面，如 石膏30先煎、阿胶9(烊化)</span><textarea name="t" id="rxt" rows="8" style="font-size:15px;line-height:1.9">' + esc(herbsToText(draft.rx.herbs)) + '</textarea></label><p class="fine" style="margin-top:8px">保存后会用这里的内容替换整张处方，可以随意增删、调换顺序。</p><div class="acts"><button type="button" class="btn" data-act="modal-close">取消</button><button class="btn primary">保存</button></div></form>', true),
+    'rx-ins': el => {
+      const i = +el.dataset.i + 1;
+      draft.rx.herbs.splice(i, 0, { name: '', dose: '', unit: 'g', note: '' });
+      rxKeep = i; renderRx(); queueSave();
+      const n = $('#h-name-' + i); if (n) n.focus();
+    },
     'rx-del': el => { draft.rx.herbs.splice(+el.dataset.i, 1); renderRx(); queueSave(); },
     advice: el => {
       const ta = $('#c-advice'), v = el.dataset.v;

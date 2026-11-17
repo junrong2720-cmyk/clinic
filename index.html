@@ -173,12 +173,15 @@ table.stat .num{text-align:right}
 .rx-tools{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .rx-tools select{width:auto;flex:1 1 180px}
 .rx-tools input{flex:2 1 240px;width:auto}
-.rx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:6px 18px}
-.rx-row{display:grid;grid-template-columns:20px minmax(0,1fr) 64px 52px 74px 24px;gap:4px;align-items:center}
+.rx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:6px 18px}
+.rx-row{display:grid;grid-template-columns:20px minmax(0,1fr) 64px 52px 74px 26px 26px;gap:4px;align-items:center}
 .rx-row .n{font-size:12px;color:var(--ink3);text-align:right;font-variant-numeric:tabular-nums}
 .rx-row input,.rx-row select{padding:4px 6px}
 .rx-row .x{border:0;background:none;color:var(--ink3);cursor:pointer;font-size:16px;line-height:1;padding:2px}
+.rx-row .x{font-size:20px;height:30px}
 .rx-row .x:hover{color:var(--zhu)}
+.rx-row .x.add{color:var(--dai);font-weight:700}
+.rx-row .x.add:hover{color:var(--dai-d)}
 .rx-row.blank input{border-style:dashed;background:var(--surface)}
 .rx-row.blank .n{color:var(--dai);font-weight:700}
 .rx-more{margin-top:12px}
@@ -186,7 +189,8 @@ table.stat .num{text-align:right}
 .rx-more[open] summary{margin-bottom:8px}
 @media (max-width:520px){
   .rx-grid{grid-template-columns:minmax(0,1fr)}
-  .rx-row{grid-template-columns:18px minmax(0,1fr) 54px 46px 60px 22px;gap:3px}
+  .rx-row{grid-template-columns:minmax(0,1fr) 50px 44px 58px 26px 26px;gap:3px}
+  .rx-row .n{display:none}
   .rx-row input,.rx-row select{padding:6px 4px;font-size:15px}
   .rx-row select{padding-right:0}
 }
@@ -301,7 +305,7 @@ table.stat .num{text-align:right}
 <datalist id="herb-list"></datalist>
 <datalist id="disease-list"></datalist>
 <!-- 每次更新程序时把 v 改掉，保证两个文件一起刷新，不会新旧混用 -->
-<script src="js/data.js?v=20261117e"></script>
-<script src="js/app.js?v=20261117e"></script>
+<script src="js/data.js?v=20261117f"></script>
+<script src="js/app.js?v=20261117f"></script>
 </body>
 </html>
