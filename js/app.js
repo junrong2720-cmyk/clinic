@@ -414,14 +414,16 @@
       '<label class="f"><span>西医诊断</span><input type="text" data-bind="western" id="c-western" value="' + esc(d.western) + '"></label></div></section>' +
 
       '<section class="card"><h2><span class="step">' + steps[3] + '</span>处方</h2>' +
-      '<div class="rx-cmd"><input type="text" id="rx-quick" list="rx-list" enterkeyhint="done" autocomplete="off" placeholder="直接打字，回车生效。例：柴胡疏肝散 加 延胡索10 海螵蛸15 去 川芎" aria-label="输入方名或药物"><button type="button" class="btn primary" data-act="rx-go">确定</button></div>' +
-      '<datalist id="rx-list">' + fxNames().map(f => '<option value="' + esc(f.name) + '">').join('') + T.ALL_HERBS.map(h => '<option value="' + h + '">').join('') + '</datalist>' +
-      '<p class="fine" style="margin:6px 0 12px">可以写：<b>方名</b>（载入整方）、<b>合 方名</b>（合方）、<b>药名+剂量</b>（加药；药已在方里就是改剂量）、<b>去 药名</b>（删药）。也可以像例子那样一句写完。</p>' +
-      '<div class="rx-tools"><select id="fx-pick" aria-label="浏览方剂库">' + fxOptions() + '</select>' +
-      '<button type="button" class="btn" data-act="fx-pick" data-mode="replace">载入</button><button type="button" class="btn" data-act="fx-pick" data-mode="merge">合方</button>' +
-      '<button type="button" class="btn" data-act="rx-text">整方文本编辑</button><button type="button" class="btn" data-act="my-save">存为常用方</button><button type="button" class="btn" data-act="rx-undo">撤销</button><button type="button" class="btn danger" data-act="rx-clear">清空</button></div>' +
+      '<div class="rx-tools"><select id="fx-pick" aria-label="从方剂库选方">' + fxOptions() + '</select>' +
+      '<button type="button" class="btn" data-act="fx-pick" data-mode="replace">载入</button><button type="button" class="btn" data-act="fx-pick" data-mode="merge">合方</button></div>' +
       '<label class="f" style="margin-bottom:10px"><span>方名</span><input type="text" data-bind="rx.formula" id="c-formula" placeholder="如：柴胡疏肝散加减" value="' + esc(d.rx.formula) + '"></label>' +
+      '<p class="fine" style="margin-bottom:6px">在最后一行直接打药名和剂量，打完会自动出现新的一行。药名框里写「黄芪30」也会自动分成药名和剂量。</p>' +
       '<div class="rx-grid" id="rx-body"></div><div class="rx-add" id="rx-add"></div>' +
+      '<div class="rx-tools" style="margin-top:12px"><button type="button" class="btn" data-act="rx-text">整方文本编辑</button><button type="button" class="btn" data-act="my-save">存为常用方</button><button type="button" class="btn" data-act="rx-undo">撤销</button><button type="button" class="btn danger" data-act="rx-clear">清空</button></div>' +
+      '<details class="rx-more"><summary>一句话快速输入（可选）</summary>' +
+      '<div class="rx-cmd"><input type="text" id="rx-quick" list="rx-list" enterkeyhint="done" autocomplete="off" placeholder="例：柴胡疏肝散 加 延胡索10 海螵蛸15 去 川芎" aria-label="一句话输入方名或药物"><button type="button" class="btn primary" data-act="rx-go">确定</button></div>' +
+      '<datalist id="rx-list">' + fxNames().map(f => '<option value="' + esc(f.name) + '">').join('') + T.ALL_HERBS.map(h => '<option value="' + h + '">').join('') + '</datalist>' +
+      '<p class="fine" style="margin-top:6px">可以写：方名（载入整方）、合 方名（合方）、药名+剂量（加药或改剂量）、去 药名（删药）。</p></details>' +
       '<div class="rx-meta"><label>剂数<input type="number" min="1" max="60" data-bind="rx.doses" id="c-doses" value="' + d.rx.doses + '"></label><label class="use">用法<input type="text" data-bind="rx.usage" id="c-usage" value="' + esc(d.rx.usage) + '"></label><span class="rx-total" id="rx-total"></span></div>' +
       '<div class="warns" id="rx-warn"></div></section>' +
 
@@ -449,17 +451,47 @@
         '<div class="sg-act"><button type="button" class="btn sm primary" data-act="adopt" data-sy="' + r.sy.name + '">采用此证</button>' + r.sy.formulas.map(f => '<button type="button" class="btn sm" data-act="adopt" data-sy="' + r.sy.name + '" data-fx="' + f + '">' + f + '</button>').join('') + '</div></article>';
     }).join('');
   }
+  // 一行药；i 为 'new' 时是末尾的空白行，打字后自动变成正式的一行
+  function rxRow(h, i) {
+    const blank = i === 'new';
+    h = h || { name: '', dose: '', unit: 'g', note: '' };
+    return '<div class="rx-row' + (blank ? ' blank' : '') + '" data-i="' + i + '"><span class="n">' + (blank ? '+' : i + 1) + '</span>' +
+      '<input type="text" data-hf="name" id="h-name-' + i + '" list="herb-list" enterkeyhint="next" autocomplete="off" aria-label="药名" placeholder="' + (blank ? '药名' : '') + '" value="' + esc(h.name) + '">' +
+      '<input type="text" inputmode="decimal" data-hf="dose" id="h-dose-' + i + '" enterkeyhint="next" autocomplete="off" aria-label="剂量" placeholder="' + (blank ? '剂量' : '') + '" value="' + h.dose + '">' +
+      '<select data-hf="unit" id="h-unit-' + i + '" aria-label="单位">' + UNITS.map(u => '<option' + (u === h.unit ? ' selected' : '') + '>' + u + '</option>').join('') + '</select>' +
+      '<select data-hf="note" id="h-note-' + i + '" aria-label="煎法">' + NOTES.map(n => '<option value="' + n + '"' + (n === h.note ? ' selected' : '') + '>' + (n || '煎法') + '</option>').join('') + '</select>' +
+      (blank ? '<span></span>' : '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除 ' + esc(h.name) + '">×</button>') + '</div>';
+  }
   function renderRx() {
     const el = $('#rx-body'); if (!el || !draft) return;
-    const hs = draft.rx.herbs;
-    el.innerHTML = hs.length ? hs.map((h, i) => '<div class="rx-row" data-i="' + i + '"><span class="n">' + (i + 1) + '</span>' +
-      '<input type="text" data-hf="name" id="h-name-' + i + '" list="herb-list" aria-label="药名" value="' + esc(h.name) + '">' +
-      '<input type="number" data-hf="dose" id="h-dose-' + i + '" min="0" step="0.5" aria-label="剂量" value="' + h.dose + '">' +
-      '<select data-hf="unit" id="h-unit-' + i + '" aria-label="单位">' + UNITS.map(u => '<option' + (u === h.unit ? ' selected' : '') + '>' + u + '</option>').join('') + '</select>' +
-      '<select data-hf="note" id="h-note-' + i + '" aria-label="煎法">' + NOTES.map(n => '<option value="' + n + '"' + (n === h.note ? ' selected' : '') + '>' + (n || '—') + '</option>').join('') + '</select>' +
-      '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除 ' + esc(h.name) + '">×</button></div>').join('')
-      : '<p class="empty" style="grid-column:1/-1">尚未开方。在上面的输入框里直接打方名或药物，回车即可' + (useFour() ? '；也可以从右侧辨证参考点方名载入' : '') + '。</p>';
+    draft.rx.herbs = draft.rx.herbs.filter(h => h.name.trim() || h.dose !== '');
+    el.innerHTML = draft.rx.herbs.map(rxRow).join('') + rxRow(null, 'new');
     renderRxMeta();
+  }
+  // 空白行里开始打字：把它记成一味新药，并在后面补一个新的空白行
+  function promoteBlank(row) {
+    const i = draft.rx.herbs.length;
+    draft.rx.herbs.push({ name: '', dose: '', unit: row.querySelector('[data-hf=unit]').value, note: row.querySelector('[data-hf=note]').value });
+    row.dataset.i = i; row.classList.remove('blank');
+    row.querySelector('.n').textContent = i + 1;
+    row.querySelectorAll('[id]').forEach(e => { e.id = e.id.replace(/-new$/, '-' + i); e.placeholder = ''; });
+    row.lastElementChild.outerHTML = '<button type="button" class="x" data-act="rx-del" data-i="' + i + '" aria-label="删除">×</button>';
+    row.insertAdjacentHTML('afterend', rxRow(null, 'new'));
+    return draft.rx.herbs[i];
+  }
+  // 药名框里写了「黄芪30」「石膏30先煎」：拆成药名、剂量、煎法
+  function splitHerbName(t) {
+    const row = t.closest('[data-i]'), i = row.dataset.i, h = draft.rx.herbs[+i];
+    if (!h) return;
+    const m = /^(.*?[^\d.\s])\s*(\d+(?:\.\d+)?)\s*(g|克|枚|片)?\s*[（(]?(先煎|后下|包煎|烊化|冲服|另煎|打碎)?[)）]?$/i.exec(t.value.trim());
+    if (m) {
+      h.name = m[1]; h.dose = +m[2]; t.value = m[1]; $('#h-dose-' + i).value = m[2];
+      if (m[3] && m[3] !== '克') { h.unit = m[3].toLowerCase(); $('#h-unit-' + i).value = h.unit; }
+      if (m[4]) { h.note = m[4]; $('#h-note-' + i).value = m[4]; }
+    } else h.name = t.value.trim();
+    const n = T.autoNote(h.name);
+    if (n && !h.note) { h.note = n; $('#h-note-' + i).value = n; }
+    renderRxMeta(); queueSave();
   }
   function renderRxMeta() {
     const rx = draft.rx, hs = rx.herbs.filter(h => h.name.trim());
@@ -1281,8 +1313,10 @@
       if (k === 'pregnant' || k === 'doses') renderRxMeta();
       queueSave();
     } else if (t.dataset.hf && draft) {
-      const h = draft.rx.herbs[+t.closest('[data-i]').dataset.i], f = t.dataset.hf;
-      h[f] = f === 'dose' ? (t.value === '' ? '' : Number(t.value)) : t.value;
+      const row = t.closest('[data-i]'), f = t.dataset.hf;
+      if (row.dataset.i === 'new' && (f === 'unit' || f === 'note' || t.value === '')) return;
+      const h = row.dataset.i === 'new' ? promoteBlank(row) : draft.rx.herbs[+row.dataset.i];
+      if (f === 'dose') { const v = parseFloat(t.value); h.dose = isNaN(v) ? '' : v; } else h[f] = t.value;
       renderRxMeta(); queueSave();
     } else if (t.id === 'pq') $('#plist').innerHTML = patientRows(t.value, !!t.dataset.pick);
     else if (t.id === 'lq') $('#lib').innerHTML = libList(t.dataset.tab, t.value);
@@ -1295,14 +1329,23 @@
     const t = e.target;
     if (t.id === 'import-file' && t.files[0]) { if (db.sync) toast('已开启同步，请先断开同步再从备份恢复', true); else importData(t.files[0]); t.value = ''; }
     else if (t.id === 'ph-file' && draft) { addPhotos(t.files); t.value = ''; }
-    else if (t.dataset.hf === 'name' && draft) {
-      const i = +t.closest('[data-i]').dataset.i, h = draft.rx.herbs[i], n = T.autoNote(t.value);
-      if (n && !h.note) { h.note = n; $('#h-note-' + i).value = n; renderRxMeta(); queueSave(); }
-    }
+    else if (t.dataset.hf === 'name' && draft) splitHerbName(t);
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !modal.hidden) closeModal();
     if (e.key === 'Enter' && e.target.id === 'rx-quick') { e.preventDefault(); runRx(e.target.value); e.target.value = ''; }
+    // 药物表格里按回车：药名 → 剂量 → 下一行药名
+    else if (e.key === 'Enter' && draft && (e.target.dataset.hf === 'name' || e.target.dataset.hf === 'dose')) {
+      e.preventDefault();
+      const t = e.target, row = t.closest('[data-i]');
+      if (t.dataset.hf === 'name') {
+        if (row.dataset.i === 'new') return;   // 空白行还没打字
+        splitHerbName(t);
+        const dose = row.querySelector('[data-hf=dose]');
+        if (dose.value === '') dose.focus(); else { const next = row.nextElementSibling; if (next) next.querySelector('[data-hf=name]').focus(); }
+      }
+      else { const next = row.nextElementSibling || $('#rx-body .rx-row.blank'); if (next) next.querySelector('[data-hf=name]').focus(); }
+    }
   });
   document.addEventListener('paste', e => {
     if (!draft || !modal.hidden || !e.clipboardData) return;

@@ -179,6 +179,17 @@ table.stat .num{text-align:right}
 .rx-row input,.rx-row select{padding:4px 6px}
 .rx-row .x{border:0;background:none;color:var(--ink3);cursor:pointer;font-size:16px;line-height:1;padding:2px}
 .rx-row .x:hover{color:var(--zhu)}
+.rx-row.blank input{border-style:dashed;background:var(--surface)}
+.rx-row.blank .n{color:var(--dai);font-weight:700}
+.rx-more{margin-top:12px}
+.rx-more summary{cursor:pointer;color:var(--ink2);font-size:13px}
+.rx-more[open] summary{margin-bottom:8px}
+@media (max-width:520px){
+  .rx-grid{grid-template-columns:minmax(0,1fr)}
+  .rx-row{grid-template-columns:18px minmax(0,1fr) 54px 46px 60px 22px;gap:3px}
+  .rx-row input,.rx-row select{padding:6px 4px;font-size:15px}
+  .rx-row select{padding-right:0}
+}
 .rx-meta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-top:14px;padding-top:12px;border-top:1px solid var(--line2)}
 .rx-meta label{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:13px}
 .rx-meta input[type=number]{width:64px}
@@ -290,7 +301,7 @@ table.stat .num{text-align:right}
 <datalist id="herb-list"></datalist>
 <datalist id="disease-list"></datalist>
 <!-- 每次更新程序时把 v 改掉，保证两个文件一起刷新，不会新旧混用 -->
-<script src="js/data.js?v=20261117d"></script>
-<script src="js/app.js?v=20261117d"></script>
+<script src="js/data.js?v=20261117e"></script>
+<script src="js/app.js?v=20261117e"></script>
 </body>
 </html>
