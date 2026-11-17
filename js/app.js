@@ -6,6 +6,7 @@
   const DEFAULT_USAGE = '水煎服，每日 1 剂，早晚分温服';
   const NOTES = ['', '先煎', '后下', '包煎', '烊化', '冲服', '另煎', '打碎'];
   const UNITS = ['g', '枚', '片'];
+  const LAB_ITEMS = ['血压：', '心率：', '血常规：', '尿常规：', '肝功能：', '肾功能：', '血糖：', '血脂：', '心电图：', 'B超：', 'CT：', 'MRI：', '胃镜：', '幽门螺杆菌：'];
   const ADVICE = ['忌食生冷', '忌辛辣油腻', '调畅情志', '避风寒', '规律作息', '清淡饮食', '7 日后复诊'];
 
   const $ = (s, el) => (el || document).querySelector(s);
@@ -88,7 +89,7 @@
     };
   }
 
-  const draftDirty = () => { const d = db.draft; return !!d && !!(d.id || d.chief || d.hpi || d.symptoms.length || d.tongueBody.length || d.tongueCoat.length || d.pulse.length || d.rx.herbs.length || d.syndrome || (d.photos || []).length); };
+  const draftDirty = () => { const d = db.draft; return !!d && !!(d.id || d.chief || d.hpi || d.symptoms.length || d.tongueBody.length || d.tongueCoat.length || d.pulse.length || d.rx.herbs.length || d.syndrome || d.labs || (d.photos || []).length); };
   const P = id => db.patients.find(p => p.id === id);
   const V = id => db.visits.find(v => v.id === id);
   const visitsOf = pid => db.visits.filter(v => v.patientId === pid).sort(byDateDesc);
@@ -231,22 +232,28 @@
     db.visits.concat(db.draft ? [db.draft] : []).forEach(v => (v.photos || []).forEach(p => keep.add(p.id)));
     idb.keys().then(ks => ks.filter(k => !keep.has(k)).forEach(k => { phCache.delete(k); idb.del(k); })).catch(() => {});
   }
-  const photoThumbs = (list, removable) => list.map(ph => '<figure class="ph"><img data-photo="' + ph.id + '" data-act="photo-view" data-id="' + ph.id + '" alt="舌象照片">' + (removable ? '<button type="button" class="ph-x" data-act="photo-del" data-id="' + ph.id + '" aria-label="删除这张照片">×</button>' : '') + '</figure>').join('');
-  const photoSec = v => (v.photos || []).length ? '<h3>舌象照片</h3><div class="phs">' + photoThumbs(v.photos) + '</div>' : '';
+  const tonguePh = v => (v.photos || []).filter(p => p.kind !== 'lab');
+  const labPh = v => (v.photos || []).filter(p => p.kind === 'lab');
+  const photoThumbs = (list, removable) => list.map(ph => '<figure class="ph"><img data-photo="' + ph.id + '" data-act="photo-view" data-id="' + ph.id + '" alt="' + (ph.kind === 'lab' ? '检查报告' : '舌象照片') + '">' + (removable ? '<button type="button" class="ph-x" data-act="photo-del" data-id="' + ph.id + '" aria-label="删除这张照片">×</button>' : '') + '</figure>').join('');
+  const photoSec = v => tonguePh(v).length ? '<h3>舌象照片</h3><div class="phs">' + photoThumbs(tonguePh(v)) + '</div>' : '';
+  const labSec = v => (v.labs ? '<h3>辅助检查</h3><p>' + esc(v.labs) + '</p>' : '') + (labPh(v).length ? (v.labs ? '' : '<h3>辅助检查</h3>') + '<div class="phs" style="margin-top:6px">' + photoThumbs(labPh(v)) + '</div>' : '');
   function renderPhotos() {
-    const el = $('#ph-strip'); if (!el || !draft) return;
-    el.innerHTML = photoThumbs(draft.photos, true) + (draft.photos.length < MAX_PHOTOS ? '<label class="ph ph-add">＋<span>拍照 / 选图</span><input type="file" class="vh" id="ph-file" accept="image/*" multiple></label>' : '');
-    hydratePhotos(el);
+    if (!draft) return;
+    [['#ph-strip', tonguePh(draft), 'ph-file'], ['#lab-strip', labPh(draft), 'lab-file']].forEach(x => {
+      const el = $(x[0]); if (!el) return;
+      el.innerHTML = photoThumbs(x[1], true) + (x[1].length < MAX_PHOTOS ? '<label class="ph ph-add">＋<span>拍照 / 选图</span><input type="file" class="vh" id="' + x[2] + '" accept="image/*" multiple></label>' : '');
+      hydratePhotos(el);
+    });
   }
-  function addPhotos(files) {
-    const d = draft, room = MAX_PHOTOS - d.photos.length;
+  function addPhotos(files, kind) {
+    const d = draft, room = MAX_PHOTOS - (kind === 'lab' ? labPh(d) : tonguePh(d)).length;
     const list = Array.from(files).filter(f => /^image\//.test(f.type));
     if (!list.length) return;
-    if (room <= 0) { toast('每次就诊最多 ' + MAX_PHOTOS + ' 张照片', true); return; }
+    if (room <= 0) { toast('每次就诊每类最多 ' + MAX_PHOTOS + ' 张照片', true); return; }
     let failed = 0;
     list.slice(0, room).reduce((chain, f) => chain.then(() => compress(f)).then(url => {
       const id = uid();
-      d.photos.push({ id: id, at: new Date().toISOString() }); phCache.set(id, url);
+      d.photos.push(kind === 'lab' ? { id: id, at: new Date().toISOString(), kind: 'lab' } : { id: id, at: new Date().toISOString() }); phCache.set(id, url);
       return phPut(id, url).catch(err => { d.photos.splice(d.photos.findIndex(p => p.id === id), 1); phCache.delete(id); throw err; });
     }).catch(() => { failed++; }), Promise.resolve()).then(() => {
       if (draft === d) renderPhotos();
@@ -259,9 +266,13 @@
     const has = v => (v.photos || []).some(p => p.id === id);
     const owner = draft && has(draft) ? draft : db.visits.find(has);
     if (!owner) return;
-    const prev = visitsOf(owner.patientId).filter(v => v.id !== owner.id && new Date(v.date) < new Date(owner.date) && (v.photos || []).length)[0];
+    if (owner.photos.find(p => p.id === id).kind === 'lab') {
+      openModal('<h2>检查报告</h2><div class="ph-cmp"><figure><img data-photo="' + id + '" alt="检查报告"><figcaption>' + dOnly(owner.date) + '</figcaption></figure></div><div class="acts"><button class="btn" data-act="modal-close">关闭</button></div>', true);
+      hydratePhotos(modal); return;
+    }
+    const prev = visitsOf(owner.patientId).filter(v => v.id !== owner.id && new Date(v.date) < new Date(owner.date) && tonguePh(v).length)[0];
     const fig = (pid, v, tag) => '<figure><img data-photo="' + pid + '" alt="舌象照片"><figcaption><b>' + tag + '</b>　' + dOnly(v.date) + (tongueText(v) ? '　' + esc(tongueText(v)) : '') + '</figcaption></figure>';
-    openModal('<h2>' + (prev ? '舌象对照' : '舌象照片') + '</h2><div class="ph-cmp">' + (prev ? fig(prev.photos[0].id, prev, '上次') : '') + fig(id, owner, prev ? '本次' : '就诊') + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button></div>', true);
+    openModal('<h2>' + (prev ? '舌象对照' : '舌象照片') + '</h2><div class="ph-cmp">' + (prev ? fig(tonguePh(prev)[0].id, prev, '上次') : '') + fig(id, owner, prev ? '本次' : '就诊') + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button></div>', true);
     hydratePhotos(modal);
   }
 
@@ -303,7 +314,7 @@
     return '<header class="head"><div><h1>' + esc(p.name) + (p.demo ? ' <span class="tag gray">示例</span>' : '') + '</h1><p class="sub"><a class="link" href="#patients">患者档案</a> / 详情</p></div>' +
       '<div class="acts"><button class="btn danger" data-act="patient-del" data-id="' + p.id + '">删除</button><button class="btn" data-act="patient-form" data-id="' + p.id + '">编辑资料</button>' + (vs.length ? '<button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用上次）</button>' : '') + '<button class="btn primary" data-act="go" data-to="consult/' + p.id + '">接诊</button></div></header>' +
       '<section class="card"><h2>基本资料</h2>' + patientInfo(p) + '</section>' +
-      (vs.some(v => (v.photos || []).length) ? '<section class="card"><h2>舌象变化</h2><div class="ph-tl">' + vs.filter(v => (v.photos || []).length).reverse().map(v => '<div><div class="phs">' + photoThumbs(v.photos) + '</div><p class="cap">' + dOnly(v.date) + ' ' + v.type + (tongueText(v) ? '<br>' + esc(tongueText(v)) : '') + '</p></div>').join('') + '</div></section>' : '') +
+      (vs.some(v => tonguePh(v).length) ? '<section class="card"><h2>舌象变化</h2><div class="ph-tl">' + vs.filter(v => tonguePh(v).length).reverse().map(v => '<div><div class="phs">' + photoThumbs(tonguePh(v)) + '</div><p class="cap">' + dOnly(v.date) + ' ' + v.type + (tongueText(v) ? '<br>' + esc(tongueText(v)) : '') + '</p></div>').join('') + '</div></section>' : '') +
       '<section class="card"><h2>就诊记录（' + vs.length + '）</h2>' + (vs.length ? '<div class="tl">' + vs.map(v => '<div class="tl-i" data-act="go" data-to="visit/' + v.id + '"><div class="tl-d">' + dTime(v.date) + '<br><span class="tag' + (v.type === '初诊' ? ' zhu' : '') + '">' + v.type + '</span></div><div><b>' + esc(v.chief) + '</b><br>' + esc(dxText(v)) + (v.method ? '　治法：' + esc(v.method) : '') + '<br><span class="muted">' + esc(rxText(v)) + '</span></div></div>').join('') + '</div>' : '<p class="empty">尚无就诊记录</p>') + '</section>';
   }
   function patientForm(id, then) {
@@ -335,13 +346,13 @@
 
   /* ---------- 接诊 ---------- */
   function blankDraft(p) {
-    return { id: null, patientId: p.id, date: new Date().toISOString(), type: visitsOf(p.id).length ? '复诊' : '初诊', pregnant: false, chief: '', hpi: '', symptoms: [], tongueBody: [], tongueCoat: [], pulse: [], exam: '', disease: '', western: '', syndrome: '', method: '', effect: '', photos: [], rx: { formula: '', herbs: [], doses: 7, usage: DEFAULT_USAGE }, advice: '' };
+    return { id: null, patientId: p.id, date: new Date().toISOString(), type: visitsOf(p.id).length ? '复诊' : '初诊', pregnant: false, chief: '', hpi: '', symptoms: [], tongueBody: [], tongueCoat: [], pulse: [], exam: '', labs: '', disease: '', western: '', syndrome: '', method: '', effect: '', photos: [], rx: { formula: '', herbs: [], doses: 7, usage: DEFAULT_USAGE }, advice: '' };
   }
   const prevOf = d => visitsOf(d.patientId).filter(v => v.id !== d.id && new Date(v.date) < new Date(d.date))[0] || null;
   function prevCard(v, d) {
     if (!v) return '';
     return '<section class="card prevc"><details><summary><b>上次就诊</b>' + dOnly(v.date) + ' ' + v.type + '　' + esc(dxText(v)) + '　' + esc(rxText(v)) + '</summary><div class="rec">' +
-      '<h3>主诉</h3><p>' + esc(v.chief) + '</p>' + (fourText(v) ? '<h3>四诊</h3><p>' + esc(fourText(v)) + '</p>' : '') + photoSec(v) + (v.method ? '<h3>治法</h3><p>' + esc(v.method) + '</p>' : '') +
+      '<h3>主诉</h3><p>' + esc(v.chief) + '</p>' + (fourText(v) ? '<h3>四诊</h3><p>' + esc(fourText(v)) + '</p>' : '') + photoSec(v) + labSec(v) + (v.method ? '<h3>治法</h3><p>' + esc(v.method) + '</p>' : '') +
       (v.rx.herbs.length ? '<h3>处方　' + esc(v.rx.formula) + '</h3><div class="herbs">' + v.rx.herbs.map(h => '<span>' + herbLabel(h) + '</span>').join('') + '</div>' : '') + (v.advice ? '<h3>医嘱</h3><p>' + esc(v.advice) + '</p>' : '') + '</div></details>' +
       '<div class="prev-foot"><p class="fine" id="sx-diff"></p><label>上次治疗的疗效<select data-bind="effect" id="c-effect">' + ['', '痊愈', '显效', '有效', '无效'].map(e => '<option value="' + e + '"' + ((d.effect || '') === e ? ' selected' : '') + '>' + (e || '未评价') + '</option>').join('') + '</select></label></div></section>';
   }
@@ -384,7 +395,7 @@
     const row = (label, g, items, key) => '<div class="sx-row' + (key ? ' key' : '') + '"><span class="sx-l">' + label + '</span><div class="chips">' + chips(g, items) + '</div></div>';
     const local = new Date(new Date(d.date) - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
     const prev = prevOf(d);
-    const four = useFour(), steps = four ? ['一', '二', '三', '四', '五'] : ['一', '', '二', '三', '四'];
+    const four = useFour(), steps = four ? ['一', '二', '三', '四', '五', '六'] : ['一', '', '二', '三', '四', '五'];
     const photoHint = '最多 ' + MAX_PHOTOS + ' 张，自动压缩后保存在本机；也可以按 Ctrl+V 直接粘贴截图。点缩略图放大' + (prev ? '，并与上次的舌象对照' : '') + '。';
     return '<header class="head"><div><h1>' + (d.id ? '修改病历' : '接诊') + '</h1><p class="sub"><a class="link" href="#patient/' + p.id + '">' + esc(p.name) + '</a> / ' + (d.id ? '修改 ' + dOnly(d.date) + ' 的病历' : '新病历（自动存草稿）') + '</p></div></header>' +
       '<div class="consult' + (four ? '' : ' nofour') + '">' +
@@ -407,13 +418,19 @@
 
       '<aside class="sg-col"><div class="sg-wrap"><h2>辨证参考</h2><p class="fine">按已选症状、舌、脉与证型库逐条比对，实时更新。</p><div id="suggest"></div></div></aside>' : '') +
 
-      '<section class="card"><h2><span class="step">' + steps[2] + '</span>诊断</h2><div class="g4">' +
+      '<section class="card"><h2><span class="step">' + steps[2] + '</span>辅助检查</h2>' +
+      '<textarea data-bind="labs" id="c-labs" rows="3" placeholder="血压、血常规、生化、影像、心电图、胃镜等结果，没有可留空">' + esc(d.labs || '') + '</textarea>' +
+      '<div class="chips" style="margin-top:8px">' + LAB_ITEMS.map(a => '<button type="button" class="chip" data-act="lab-add" data-v="' + a + '">+ ' + a.replace('：', '') + '</button>').join('') + '</div>' +
+      '<p class="sx-l" style="margin-top:12px">检查报告照片（可选）</p><div class="phs" id="lab-strip" style="margin-top:6px"></div>' +
+      '<p class="fine" style="margin-top:6px">化验单、影像报告可以直接拍照，最多 ' + MAX_PHOTOS + ' 张；光标在上面的文字框里时按 Ctrl+V 粘贴的截图会放到这里。</p></section>' +
+
+      '<section class="card"><h2><span class="step">' + steps[3] + '</span>诊断</h2><div class="g4">' +
       '<label class="f"><span>中医病名</span><input type="text" data-bind="disease" id="c-disease" list="disease-list" value="' + esc(d.disease) + '"></label>' +
       '<label class="f"><span>证型</span><input type="text" data-bind="syndrome" id="c-syndrome" value="' + esc(d.syndrome) + '"></label>' +
       '<label class="f"><span>治法</span><input type="text" data-bind="method" id="c-method" value="' + esc(d.method) + '"></label>' +
       '<label class="f"><span>西医诊断</span><input type="text" data-bind="western" id="c-western" value="' + esc(d.western) + '"></label></div></section>' +
 
-      '<section class="card"><h2><span class="step">' + steps[3] + '</span>处方</h2>' +
+      '<section class="card"><h2><span class="step">' + steps[4] + '</span>处方</h2>' +
       '<div class="rx-tools"><select id="fx-pick" aria-label="从方剂库选方">' + fxOptions() + '</select>' +
       '<button type="button" class="btn" data-act="fx-pick" data-mode="replace">载入</button><button type="button" class="btn" data-act="fx-pick" data-mode="merge">合方</button></div>' +
       '<label class="f" style="margin-bottom:10px"><span>方名</span><input type="text" data-bind="rx.formula" id="c-formula" placeholder="如：柴胡疏肝散加减" value="' + esc(d.rx.formula) + '"></label>' +
@@ -427,7 +444,7 @@
       '<div class="rx-meta"><label>剂数<input type="number" min="1" max="60" data-bind="rx.doses" id="c-doses" value="' + d.rx.doses + '"></label><label class="use">用法<input type="text" data-bind="rx.usage" id="c-usage" value="' + esc(d.rx.usage) + '"></label><span class="rx-total" id="rx-total"></span></div>' +
       '<div class="warns" id="rx-warn"></div></section>' +
 
-      '<section class="card"><h2><span class="step">' + steps[4] + '</span>医嘱</h2><textarea data-bind="advice" id="c-advice" rows="2" placeholder="饮食起居宜忌、复诊时间">' + esc(d.advice) + '</textarea><div class="chips" style="margin-top:8px">' + ADVICE.map(a => '<button type="button" class="chip" data-act="advice" data-v="' + a + '">+ ' + a + '</button>').join('') + '</div></section>' +
+      '<section class="card"><h2><span class="step">' + steps[5] + '</span>医嘱</h2><textarea data-bind="advice" id="c-advice" rows="2" placeholder="饮食起居宜忌、复诊时间">' + esc(d.advice) + '</textarea><div class="chips" style="margin-top:8px">' + ADVICE.map(a => '<button type="button" class="chip" data-act="advice" data-v="' + a + '">+ ' + a + '</button>').join('') + '</div></section>' +
 
       '<div class="savebar"><button class="btn" data-act="consult-cancel">' + (d.id ? '放弃修改' : '放弃本次接诊') + '</button><button class="btn" data-act="consult-save">保存病历</button><button class="btn primary" data-act="consult-save" data-print="1">保存并打印处方</button></div>' +
       '</div>';
@@ -626,7 +643,7 @@
     return '<header class="head"><div><h1>门诊病历' + (v.demo ? ' <span class="tag gray">示例</span>' : '') + '</h1><p class="sub"><a class="link" href="#patient/' + p.id + '">' + esc(p.name) + '</a> / ' + dTime(v.date) + ' ' + v.type + '</p></div>' +
       '<div class="acts"><button class="btn danger" data-act="visit-del" data-id="' + v.id + '">删除</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/edit/' + v.id + '">修改</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用）</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="record">打印病历</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="rx">打印处方笺</button>' + (v.rx.herbs.length ? '<button class="btn primary" data-act="sheet-img" data-id="' + v.id + '" data-mode="rx">处方图片</button>' : '') + '</div></header>' +
       '<section class="card"><h2>患者</h2>' + (p.id ? patientInfo(p) : '<p class="muted">患者档案已删除</p>') + '</section>' +
-      '<section class="card rec"><h2>病历' + (v.pregnant ? ' <span class="tag zhu">妊娠期</span>' : '') + '</h2>' + sec('主诉', v.chief) + sec('现病史', v.hpi) + sec('四诊', four) + photoSec(v) + sec('四诊补充', v.exam) + sec('上次治疗的疗效', v.effect) +
+      '<section class="card rec"><h2>病历' + (v.pregnant ? ' <span class="tag zhu">妊娠期</span>' : '') + '</h2>' + sec('主诉', v.chief) + sec('现病史', v.hpi) + sec('四诊', four) + photoSec(v) + sec('四诊补充', v.exam) + labSec(v) + sec('上次治疗的疗效', v.effect) +
       '<h3>诊断</h3><p>' + esc([v.disease && '中医：' + v.disease, v.syndrome && '证型：' + v.syndrome, v.western && '西医：' + v.western].filter(Boolean).join('　') || '—') + '</p>' + sec('治法', v.method) +
       '<h3>处方' + (v.rx.formula ? '　' + esc(v.rx.formula) : '') + '</h3>' + (v.rx.herbs.length ? '<div class="herbs">' + v.rx.herbs.map(h => '<span>' + herbLabel(h) + '</span>').join('') + '</div><p>共 ' + v.rx.herbs.length + ' 味 × ' + v.rx.doses + ' 剂　' + esc(v.rx.usage) + '</p>' : '<p class="muted">未开方</p>') +
       sec('医嘱', v.advice) + '</section>';
@@ -644,7 +661,7 @@
       '<div class="rp-sec"><b>用法</b>共 ' + v.rx.herbs.length + ' 味，' + v.rx.doses + ' 剂。' + esc(v.rx.usage) + '</div>';
     const html = head + (mode === 'rx'
       ? sec('诊断', dx) + sec('治法', v.method) + rp + sec('医嘱', v.advice)
-      : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
+      : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('辅助检查', v.labs) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
       '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
     $('#print').innerHTML = html;
     openModal('<div class="sheet preview">' + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
@@ -659,7 +676,7 @@
     const dx = [v.disease, v.syndrome].filter(Boolean).join(' · ') + (v.western ? '（' + v.western + '）' : '');
     const info = ['姓名：' + p.name, '性别：' + p.gender, '年龄：' + (p.id ? ageText(p) : ''), '日期：' + dOnly(v.date), v.type].concat(p.allergy ? ['过敏史：' + p.allergy] : [], v.pregnant ? ['妊娠期'] : []);
     const before = mode === 'rx' ? [['诊断', dx], ['治法', v.method]]
-      : [['主诉', v.chief], ['现病史', v.hpi], ['既往史', p.history], ['四诊', [fourText(v), v.exam].filter(Boolean).join('；')], ['诊断', dx], ['治法', v.method]];
+      : [['主诉', v.chief], ['现病史', v.hpi], ['既往史', p.history], ['四诊', [fourText(v), v.exam].filter(Boolean).join('；')], ['辅助检查', v.labs], ['诊断', dx], ['治法', v.method]];
     const n = v.rx.herbs.length;
     const after = [['用法', n ? '共 ' + n + ' 味，' + v.rx.doses + ' 剂。' + v.rx.usage : ''], ['医嘱', v.advice]];
     const render = ctx => {
@@ -1079,7 +1096,7 @@
       if (rq.to && day > rq.to) return false;
       if (!kw) return true;
       const p = P(v.patientId);
-      return [(p && p.name) || '', v.chief, v.disease, v.syndrome, v.western, v.rx.formula, v.rx.herbs.map(h => h.name).join(' '), v.symptoms.join(' ')].join(' ').toLowerCase().indexOf(kw) >= 0;
+      return [(p && p.name) || '', v.chief, v.disease, v.syndrome, v.western, v.rx.formula, v.rx.herbs.map(h => h.name).join(' '), v.symptoms.join(' '), v.hpi, v.labs || ''].join(' ').toLowerCase().indexOf(kw) >= 0;
     }).sort(byDateDesc);
   }
   const tally = arr => { const m = new Map(); arr.forEach(x => { if (x) m.set(x, (m.get(x) || 0) + 1); }); return Array.from(m).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), 'zh')); };
@@ -1128,10 +1145,10 @@
   function csvVisits() {
     const list = filteredVisits().reverse();
     if (!list.length) { toast('没有可导出的病历', true); return; }
-    const rows = [['就诊时间', '姓名', '性别', '年龄', '初复诊', '妊娠期', '主诉', '现病史', '症状', '舌质', '舌苔', '脉象', '四诊补充', '中医病名', '证型', '西医诊断', '治法', '上次疗效', '方名', '药物组成', '药味数', '剂数', '用法', '医嘱']];
+    const rows = [['就诊时间', '姓名', '性别', '年龄', '初复诊', '妊娠期', '主诉', '现病史', '症状', '舌质', '舌苔', '脉象', '四诊补充', '辅助检查', '中医病名', '证型', '西医诊断', '治法', '上次疗效', '方名', '药物组成', '药味数', '剂数', '用法', '医嘱']];
     list.forEach(v => {
       const p = P(v.patientId) || {}, a = p.id ? ageOf(p) : null, has = v.rx.herbs.length;
-      rows.push([dTime(v.date), p.name || '', p.gender || '', a == null ? '' : a, v.type, v.pregnant ? '是' : '', v.chief, v.hpi, v.symptoms.join('、'), v.tongueBody.join('、'), v.tongueCoat.join('、'), v.pulse.join('、'), v.exam, v.disease, v.syndrome, v.western, v.method, v.effect || '', v.rx.formula,
+      rows.push([dTime(v.date), p.name || '', p.gender || '', a == null ? '' : a, v.type, v.pregnant ? '是' : '', v.chief, v.hpi, v.symptoms.join('、'), v.tongueBody.join('、'), v.tongueCoat.join('、'), v.pulse.join('、'), v.exam, v.labs || '', v.disease, v.syndrome, v.western, v.method, v.effect || '', v.rx.formula,
         v.rx.herbs.map(h => h.name + h.dose + h.unit + (h.note ? '(' + h.note + ')' : '')).join('、'), has, has ? v.rx.doses : '', has ? v.rx.usage : '', v.advice]);
     });
     download('病历表_' + dOnly(new Date()) + '.csv', csv(rows), 'text/csv;charset=utf-8');
@@ -1264,6 +1281,14 @@
     print: el => printVisit(el.dataset.id, el.dataset.mode),
     export: exportData,
     'do-print': () => window.print(),
+    'lab-add': el => {
+      const ta = $('#c-labs'), v = el.dataset.v;
+      const cur = ta.value.replace(/\s+$/, '');
+      ta.value = (cur ? cur + '\n' : '') + v;
+      draft.labs = ta.value; queueSave();
+      // 光标放到冒号后面，接着打结果
+      ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    },
     'sheet-img': el => sheetImage(el.dataset.id, el.dataset.mode),
     'sheet-share': () => { if (sheetFile) navigator.share({ files: [sheetFile] }).catch(() => {}); },
     'sheet-dl': () => {
@@ -1339,6 +1364,7 @@
     const t = e.target;
     if (t.id === 'import-file' && t.files[0]) { if (db.sync) toast('已开启同步，请先断开同步再从备份恢复', true); else importData(t.files[0]); t.value = ''; }
     else if (t.id === 'ph-file' && draft) { addPhotos(t.files); t.value = ''; }
+    else if (t.id === 'lab-file' && draft) { addPhotos(t.files, 'lab'); t.value = ''; }
     else if (t.dataset.hf === 'name' && draft) splitHerbName(t);
   });
   document.addEventListener('keydown', e => {
@@ -1360,7 +1386,7 @@
   document.addEventListener('paste', e => {
     if (!draft || !modal.hidden || !e.clipboardData) return;
     const imgs = Array.from(e.clipboardData.files || []).filter(f => /^image\//.test(f.type));
-    if (imgs.length) { e.preventDefault(); addPhotos(imgs); }
+    if (imgs.length) { e.preventDefault(); addPhotos(imgs, document.activeElement && document.activeElement.id === 'c-labs' ? 'lab' : ''); }
   });
   document.addEventListener('submit', e => {
     if (e.target.id === 'pf') { e.preventDefault(); savePatient(e.target); }
