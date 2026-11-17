@@ -7,6 +7,11 @@
   const NOTES = ['', '先煎', '后下', '包煎', '烊化', '冲服', '另煎', '打碎'];
   const UNITS = ['g', '枚', '片'];
   const LAB_ITEMS = ['血压：', '心率：', '血常规：', '尿常规：', '肝功能：', '肾功能：', '血糖：', '血脂：', '心电图：', 'B超：', 'CT：', 'MRI：', '胃镜：', '幽门螺杆菌：'];
+  const IMPORT_PARTS = [
+    ['chief', '主诉', false, ['chief']], ['hpi', '现病史', true, ['hpi']], ['four', '四诊点选与补充', true, ['symptoms', 'tongueBody', 'tongueCoat', 'pulse', 'exam']],
+    ['labs', '辅助检查（文字）', false, ['labs']], ['dx', '诊断与治法', true, ['disease', 'syndrome', 'method', 'western']],
+    ['rx', '处方（药物、剂数、用法）', true, ['rx']], ['advice', '医嘱', true, ['advice']]
+  ];
   const ADVICE = ['忌食生冷', '忌辛辣油腻', '调畅情志', '避风寒', '规律作息', '清淡饮食', '7 日后复诊'];
 
   const $ = (s, el) => (el || document).querySelector(s);
@@ -378,7 +383,7 @@
     return '<section class="card prevc"><details><summary><b>上次就诊</b>' + dOnly(v.date) + ' ' + v.type + '　' + esc(dxText(v)) + '　' + esc(rxText(v)) + '</summary><div class="rec">' +
       '<h3>主诉</h3><p>' + esc(v.chief) + '</p>' + (fourText(v) ? '<h3>四诊</h3><p>' + esc(fourText(v)) + '</p>' : '') + photoSec(v) + labSec(v) + (v.method ? '<h3>治法</h3><p>' + esc(v.method) + '</p>' : '') +
       (v.rx.herbs.length ? '<h3>处方　' + esc(v.rx.formula) + '</h3><div class="herbs">' + v.rx.herbs.map(h => '<span>' + herbLabel(h) + '</span>').join('') + '</div>' : '') + (v.advice ? '<h3>医嘱</h3><p>' + esc(v.advice) + '</p>' : '') + '</div></details>' +
-      '<div class="prev-foot"><p class="fine" id="sx-diff"></p><label>上次治疗的疗效<select data-bind="effect" id="c-effect">' + ['', '痊愈', '显效', '有效', '无效'].map(e => '<option value="' + e + '"' + ((d.effect || '') === e ? ' selected' : '') + '>' + (e || '未评价') + '</option>').join('') + '</select></label></div></section>';
+      '<div class="prev-foot"><p class="fine" id="sx-diff"></p><button type="button" class="btn sm primary" data-act="import-prev">导入上次内容</button><label>上次治疗的疗效<select data-bind="effect" id="c-effect">' + ['', '痊愈', '显效', '有效', '无效'].map(e => '<option value="' + e + '"' + ((d.effect || '') === e ? ' selected' : '') + '>' + (e || '未评价') + '</option>').join('') + '</select></label></div></section>';
   }
   function updateDiff() {
     const el = $('#sx-diff'); if (!el || !draft) return;
@@ -1366,6 +1371,14 @@
       draft.advice = (draft.advice ? draft.advice.replace(/[，。\s]*$/, '') + '，' : '') + v; ta.value = draft.advice; queueSave();
     },
     'consult-save': el => saveVisit(!!el.dataset.print),
+    'import-prev': () => {
+      const prev = prevOf(draft); if (!prev) return;
+      const parts = IMPORT_PARTS.filter(x => x[0] !== 'four' || useFour());
+      const has = x => x[3].some(k => k === 'rx' ? prev.rx.herbs.length : Array.isArray(prev[k]) ? prev[k].length : prev[k]);
+      openModal('<h2>导入 ' + dOnly(prev.date) + ' 的内容</h2><form id="impprevf"><p class="fine" style="margin-bottom:10px">勾选的部分会覆盖本次已填的内容；处方导入后可以点「撤销」恢复。</p><div style="display:flex;flex-direction:column;gap:10px">' +
+        parts.map(x => '<label style="display:flex;gap:8px;align-items:center' + (has(x) ? '' : ';color:var(--ink3)') + '"><input type="checkbox" name="' + x[0] + '" id="imp-' + x[0] + '"' + (x[2] && has(x) ? ' checked' : '') + (has(x) ? '' : ' disabled') + '>' + x[1] + (has(x) ? '' : '（上次没有填）') + '</label>').join('') +
+        '</div><div class="acts"><button type="button" class="btn" data-act="modal-close">取消</button><button class="btn primary">导入</button></div></form>');
+    },
     'consult-cancel': () => {
       const pid = draft.patientId;
       confirmBox('放弃', '<p>本次填写的内容不会保存。</p>', '放弃', () => { db.draft = null; draft = null; save(); closeModal(); go('patient/' + pid); }, true);
@@ -1498,6 +1511,16 @@
     else if (e.target.id === 'lockf') { e.preventDefault(); unlock(String(new FormData(e.target).get('pw'))); }
     else if (e.target.id === 'pwf') { e.preventDefault(); doPw(e.target); }
     else if (e.target.id === 'impf') { e.preventDefault(); decryptBackup(e.target); }
+    else if (e.target.id === 'impprevf') {
+      e.preventDefault();
+      const f = new FormData(e.target), prev = prevOf(draft); let n = 0;
+      if (!prev) return;
+      IMPORT_PARTS.forEach(x => { if (!f.get(x[0])) return; if (x[0] === 'rx') snapRx(); x[3].forEach(k => { draft[k] = clone(prev[k] == null ? '' : prev[k]); }); n++; });
+      closeModal();
+      if (!n) return;
+      db.draft = draft; save(); route();   // 重新画接诊页，导入的内容全部显示出来
+      toast('已导入 ' + n + ' 项，请按本次情况修改');
+    }
     else if (e.target.id === 'rxtf') {
       e.preventDefault(); snapRx();
       draft.rx.herbs = textToHerbs(String(new FormData(e.target).get('t')));
