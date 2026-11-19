@@ -670,7 +670,7 @@
     const sec = (t, c) => c ? '<h3>' + t + '</h3><p>' + esc(c) + '</p>' : '';
     const four = fourText(v);
     return '<header class="head"><div><h1>门诊病历' + (v.demo ? ' <span class="tag gray">示例</span>' : '') + '</h1><p class="sub"><a class="link" href="#patient/' + p.id + '">' + esc(p.name) + '</a> / ' + dTime(v.date) + ' ' + v.type + '</p></div>' +
-      '<div class="acts"><button class="btn danger" data-act="visit-del" data-id="' + v.id + '">删除</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/edit/' + v.id + '">修改</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用）</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="record">打印病历</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="rx">打印处方笺</button>' + (v.rx.herbs.length ? '<button class="btn primary" data-act="sheet-img" data-id="' + v.id + '" data-mode="rx">处方图片</button>' : '') + '</div></header>' +
+      '<div class="acts"><button class="btn danger" data-act="visit-del" data-id="' + v.id + '">删除</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/edit/' + v.id + '">修改</button><button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用）</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="record">打印病历</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="rx">打印处方笺</button>' + (v.rx.herbs.length ? '<button class="btn primary" data-act="sheet-img" data-id="' + v.id + '" data-mode="rx">处方图片</button><button class="btn primary" data-act="send-patient" data-id="' + v.id + '">发给患者</button>' : '') + '</div></header>' +
       '<section class="card"><h2>患者</h2>' + (p.id ? patientInfo(p) : '<p class="muted">患者档案已删除</p>') + '</section>' +
       '<section class="card rec"><h2>病历' + (v.pregnant ? ' <span class="tag zhu">妊娠期</span>' : '') + '</h2>' + sec('主诉', v.chief) + sec('现病史', v.hpi) + sec('四诊', four) + photoSec(v) + sec('四诊补充', v.exam) + labSec(v) + sec('上次治疗的疗效', v.effect) +
       '<h3>诊断</h3><p>' + esc([v.disease && '中医：' + v.disease, v.syndrome && '证型：' + v.syndrome, v.western && '西医：' + v.western].filter(Boolean).join('　') || '—') + '</p>' + sec('治法', v.method) +
@@ -763,6 +763,46 @@
       try { canShare = !!(navigator.canShare && navigator.canShare({ files: [sheetFile] })); } catch (e) { /* 不支持分享文件 */ }
       openModal('<h2>' + label + '图片</h2><img class="sheet-img" id="sheet-img" alt="' + label + '" src="' + c.toDataURL('image/png') + '"><p class="fine" style="margin-top:8px">手机上长按图片，可以直接发给微信好友或保存到相册。</p><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn' + (canShare ? '' : ' primary') + '" data-act="sheet-dl">保存到本机</button>' + (canShare ? '<button class="btn primary" data-act="sheet-share">分享（微信等）</button>' : '') + '</div>', true);
     }, 'image/png');
+  }
+
+  /* ---------- 发给患者（患者端「随诊本」）：处方压缩后放在链接 # 后面，浏览器不会把 # 后面的内容发给服务器 ---------- */
+  const PATIENT_APP = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? 'http://localhost:8621/' : 'https://junrong2720-cmyk.github.io/care/';
+  let patientMsg = '';
+  const b64u = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+  async function packRx(obj) {
+    const bytes = new TextEncoder().encode(JSON.stringify(obj));
+    if (window.CompressionStream) return 'z' + b64u(new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()));
+    return 'j' + b64u(bytes);
+  }
+  // 医嘱里写了「7 日后复诊」「2 周后复诊」就自动算出复诊日期
+  function guessNext(v) {
+    const m = /(\d+)\s*(日|天|周)\s*后?\s*复诊/.exec(v.advice || '');
+    if (!m) return '';
+    const d = new Date(v.date); d.setDate(d.getDate() + Number(m[1]) * (m[2] === '周' ? 7 : 1)); return dOnly(d.toISOString());
+  }
+  function sendPatient(id) {
+    const v = V(id); if (!v || !v.rx.herbs.length) return;
+    const p = P(v.patientId) || { name: '' };
+    openModal('<h2>发给患者</h2><p class="fine">生成一个链接，用微信发给患者。患者点开后，处方会保存在 TA 手机上的「随诊本」里：每天服药打卡、煎药方法（先煎/后下等自动生成）、复诊提醒和症状日记。处方内容只在链接里，不经过任何服务器。</p>' +
+      '<label class="f"><span>复诊日期</span><input type="date" id="pt-next" value="' + guessNext(v) + '"></label>' +
+      '<label style="display:block;margin:10px 0 4px"><input type="checkbox" id="pt-name" checked> 附带患者姓名</label>' +
+      '<label style="display:block;margin:4px 0 10px"><input type="checkbox" id="pt-dx" checked> 附带诊断（病名 · 证型）</label>' +
+      '<textarea id="pt-msg" rows="5" readonly style="width:100%;font-size:13px"></textarea><p class="fine" id="pt-len"></p>' +
+      '<div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="pt-copy">复制</button>' + (navigator.share ? '<button class="btn primary" data-act="pt-share">分享（微信等）</button>' : '') + '</div>');
+    const make = async () => {
+      const withName = $('#pt-name').checked, withDx = $('#pt-dx').checked, s = db.settings;
+      const obj = {
+        v: 1, id: v.id, t: Date.now(), d: v.date, c: s.clinic || '', dr: s.doctor || '', n: withName ? p.name : '',
+        dx: withDx ? [v.disease, v.syndrome].filter(Boolean).join(' · ') : '', f: v.rx.formula || '自拟方',
+        h: v.rx.herbs.filter(h => h.name && h.name.trim()).map(h => [h.name.trim(), h.dose === '' ? '' : String(h.dose), h.unit || 'g', h.note || '']),
+        k: v.rx.doses, u: v.rx.usage || '', a: v.advice || '', nx: $('#pt-next').value || ''
+      };
+      const url = PATIENT_APP + '#rx=' + await packRx(obj);
+      patientMsg = (withName && p.name ? p.name + '，您好！' : '您好！') + '这是您 ' + dOnly(v.date) + ' 的处方（' + obj.f + '）。点开链接可以看煎药方法、每天服药打卡和复诊提醒，建议用手机浏览器打开并「添加到主屏幕」：\n' + url;
+      const ta = $('#pt-msg'); if (ta) { ta.value = patientMsg; $('#pt-len').textContent = '链接长度 ' + url.length + ' 字符'; }
+    };
+    ['#pt-next', '#pt-name', '#pt-dx'].forEach(sel => $(sel).addEventListener('change', make));
+    make().catch(e => toast('生成链接失败：' + e.message, true));
   }
 
   /* ---------- 知识库 ---------- */
@@ -1406,6 +1446,14 @@
       ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
     },
     'sheet-img': el => sheetImage(el.dataset.id, el.dataset.mode),
+    'send-patient': el => sendPatient(el.dataset.id),
+    'pt-copy': () => {
+      if (!patientMsg) return;
+      const done = () => toast('已复制，粘贴到微信发给患者');
+      if (navigator.clipboard) navigator.clipboard.writeText(patientMsg).then(done, () => { $('#pt-msg').select(); document.execCommand('copy'); done(); });
+      else { $('#pt-msg').select(); document.execCommand('copy'); done(); }
+    },
+    'pt-share': () => { if (patientMsg) navigator.share({ text: patientMsg }).catch(() => {}); },
     'sheet-share': () => { if (sheetFile) navigator.share({ files: [sheetFile] }).catch(() => {}); },
     'sheet-dl': () => {
       if (!sheetFile) return;
