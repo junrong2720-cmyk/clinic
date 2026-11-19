@@ -767,7 +767,7 @@
 
   /* ---------- 发给患者（患者端「随诊本」）：处方压缩后放在链接 # 后面，浏览器不会把 # 后面的内容发给服务器 ---------- */
   const PATIENT_APP = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? 'http://localhost:8621/' : 'https://junrong2720-cmyk.github.io/care/';
-  let patientMsg = '';
+  let patientMsg = '', ptLang = 'zh';  // 记住上次选的消息语言（本次打开期间）
   const b64u = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   async function packRx(obj) {
     const bytes = new TextEncoder().encode(JSON.stringify(obj));
@@ -785,6 +785,7 @@
     const p = P(v.patientId) || { name: '' };
     openModal('<h2>发给患者</h2><p class="fine">生成一个链接，用微信发给患者。患者点开后，处方会保存在 TA 手机上的「随诊本」里：每天服药打卡、煎药方法（先煎/后下等自动生成）、复诊提醒和症状日记。处方内容只在链接里，不经过任何服务器。</p>' +
       '<label class="f"><span>复诊日期</span><input type="date" id="pt-next" value="' + guessNext(v) + '"></label>' +
+      '<label class="f"><span>消息语言（患者第一次打开 App 时会自己选界面语言）</span><select id="pt-lang">' + [['zh', '中文'], ['en', 'English'], ['ms', 'Bahasa Melayu']].map(l => '<option value="' + l[0] + '"' + (l[0] === ptLang ? ' selected' : '') + '>' + l[1] + '</option>').join('') + '</select></label>' +
       '<label style="display:block;margin:10px 0 4px"><input type="checkbox" id="pt-name" checked> 附带患者姓名</label>' +
       '<label style="display:block;margin:4px 0 10px"><input type="checkbox" id="pt-dx" checked> 附带诊断（病名 · 证型）</label>' +
       '<textarea id="pt-msg" rows="5" readonly style="width:100%;font-size:13px"></textarea><p class="fine" id="pt-len"></p>' +
@@ -798,10 +799,16 @@
         k: v.rx.doses, u: v.rx.usage || '', a: v.advice || '', nx: $('#pt-next').value || ''
       };
       const url = PATIENT_APP + '#rx=' + await packRx(obj);
-      patientMsg = (withName && p.name ? p.name + '，您好！' : '您好！') + '这是您 ' + dOnly(v.date) + ' 的处方（' + obj.f + '）。点开链接可以看煎药方法、每天服药打卡和复诊提醒，建议用手机浏览器打开并「添加到主屏幕」：\n' + url;
+      const nm = withName && p.name ? p.name : '', day = dOnly(v.date);
+      ptLang = $('#pt-lang').value;
+      patientMsg = ptLang === 'en'
+        ? 'Hi' + (nm ? ' ' + nm : '') + ', here is your prescription from ' + day + ' (' + obj.f + '). Open the link to see how to cook the herbs, tick off daily doses and get follow-up reminders. Please open it in your phone browser and tap "Add to Home Screen":\n' + url
+        : ptLang === 'ms'
+          ? 'Hai' + (nm ? ' ' + nm : '') + ', ini preskripsi anda bertarikh ' + day + ' (' + obj.f + '). Buka pautan ini untuk melihat cara merebus herba, menanda dos harian dan peringatan temujanji susulan. Sila buka dalam pelayar telefon dan pilih "Tambah ke Skrin Utama":\n' + url
+          : (nm ? nm + '，您好！' : '您好！') + '这是您 ' + day + ' 的处方（' + obj.f + '）。点开链接可以看煎药方法、每天服药打卡和复诊提醒，建议用手机浏览器打开并「添加到主屏幕」：\n' + url;
       const ta = $('#pt-msg'); if (ta) { ta.value = patientMsg; $('#pt-len').textContent = '链接长度 ' + url.length + ' 字符'; }
     };
-    ['#pt-next', '#pt-name', '#pt-dx'].forEach(sel => $(sel).addEventListener('change', make));
+    ['#pt-next', '#pt-name', '#pt-dx', '#pt-lang'].forEach(sel => $(sel).addEventListener('change', make));
     make().catch(e => toast('生成链接失败：' + e.message, true));
   }
 
