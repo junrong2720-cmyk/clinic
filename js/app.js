@@ -687,6 +687,27 @@
       '<text x="' + (w / 2) + '" y="105" font-family="KaiTi,STKaiti,Kaiti SC,serif" font-size="28" fill="#000" fill-opacity=".075">' + esc(t) + '</text>' +
       '</pattern></defs><rect width="100%" height="100%" fill="url(#' + id + ')"/></svg>';
   }
+  /* 纸面背景：none 白纸 / fret 宣纸底＋回纹边框 / jing 再加淡色竖排《素问》经文 */
+  const BG_TINT = '#FBF7EE', FRET = 'M1 15H15V1H3V12H12V4H6V9H9';
+  const JING = '上古之人其知道者法于阴阳和于术数食饮有节起居有常不妄作劳故能形与神俱而尽终其天年度百岁乃去是以圣人不治已病治未病不治已乱治未乱恬惔虚无真气从之精神内守病安从来';
+  const bgStyle = () => { const b = db.settings.bg; return b === 'none' || b === 'jing' ? b : 'fret'; };
+  const svgAt = (inset, inner) => '<svg class="wm" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"' + (inset ? ' style="inset:' + inset + 'px;width:calc(100% - ' + inset * 2 + 'px);height:calc(100% - ' + inset * 2 + 'px)"' : '') + '>' + inner + '</svg>';
+  function bgSvg(id) {
+    const b = bgStyle(); if (b === 'none') return '';
+    let jing = '';
+    if (b === 'jing') {
+      // 8 列 × 14 字一块，从右往左竖排，整块平铺
+      const cols = 8, rows = 14, cw = 46, ch = 36;
+      let t = '';
+      for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) t += '<text x="' + ((cols - 1 - c) * cw + cw / 2) + '" y="' + (r * ch + 28) + '">' + JING[(c * rows + r) % JING.length] + '</text>';
+      jing = '<defs><pattern id="' + id + '-j" width="' + cols * cw + '" height="' + rows * ch + '" patternUnits="userSpaceOnUse"><g font-family="KaiTi,STKaiti,Kaiti SC,serif" font-size="28" text-anchor="middle" fill="#3E5866" fill-opacity=".07">' + t + '</g></pattern></defs><rect width="100%" height="100%" fill="url(#' + id + '-j)"/>';
+    }
+    return svgAt(0, '<rect width="100%" height="100%" fill="' + BG_TINT + '"/>') +
+      svgAt(8, '<defs><pattern id="' + id + '-f" width="16" height="16" patternUnits="userSpaceOnUse"><path d="' + FRET + '" fill="none" stroke="#B8403F" stroke-opacity=".38" stroke-width="1.4"/></pattern></defs><rect width="100%" height="100%" fill="url(#' + id + '-f)"/>') +
+      svgAt(24, '<rect width="100%" height="100%" fill="' + BG_TINT + '"/>' + jing) +
+      svgAt(28, '<rect x=".5" y=".5" width="99.6%" height="99.6%" fill="none" stroke="#B8403F" stroke-opacity=".35"/>');
+  }
+  const sheetLayers = id => bgSvg(id + '-bg') + wmSvg(id);
   function printVisit(id, mode) {
     const v = V(id); if (!v) return;
     const p = P(v.patientId) || { name: '', gender: '' };
@@ -703,8 +724,10 @@
       : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('辅助检查', v.labs) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
       '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
     // 打印区和预览各用一个 pattern id：打印区平时是隐藏的，共用 id 会让预览里的水印画不出来
-    $('#print').innerHTML = wmSvg('wm-print') + html;
-    openModal('<div class="sheet preview">' + wmSvg('wm-prev') + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+    const hasBg = bgStyle() !== 'none';
+    $('#print').innerHTML = sheetLayers('wm-print') + html;
+    $('#print').classList.toggle('has-bg', hasBg);
+    openModal('<div class="sheet preview' + (hasBg ? ' has-bg' : '') + '">' + sheetLayers('wm-prev') + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
   }
 
   /* ---------- 处方笺图片（发微信用）：直接画在画布上，不依赖外部库 ---------- */
@@ -736,6 +759,24 @@
         y += 12; rule(1, '#aaa');
       };
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height);
+      const bg = bgStyle();
+      if (bg !== 'none') {
+        // 宣纸底 → 回纹边框带 → 内框线 →（经文）
+        const H = ctx.canvas.height, k = 1.5, o = 12, band = 24;
+        ctx.fillStyle = BG_TINT; ctx.fillRect(0, 0, W, H);
+        const tile = document.createElement('canvas'); tile.width = tile.height = 16 * k;
+        const tc = tile.getContext('2d'); tc.scale(k, k); tc.strokeStyle = 'rgba(184,64,63,.38)'; tc.lineWidth = 1.4; tc.stroke(new Path2D(FRET));
+        ctx.save(); ctx.fillStyle = ctx.createPattern(tile, 'repeat');
+        ctx.fillRect(o, o, W - 2 * o, band); ctx.fillRect(o, H - o - band, W - 2 * o, band);
+        ctx.fillRect(o, o, band, H - 2 * o); ctx.fillRect(W - o - band, o, band, H - 2 * o); ctx.restore();
+        ctx.strokeStyle = 'rgba(184,64,63,.35)'; ctx.lineWidth = 1.5; ctx.strokeRect(o + band + 6, o + band + 6, W - 2 * (o + band + 6), H - 2 * (o + band + 6));
+        if (bg === 'jing') {
+          ctx.save(); ctx.font = '42px ' + KAI; ctx.fillStyle = 'rgba(62,88,102,.07)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          const cw = 69, chh = 54, x0 = W - o - band - 40, rows = Math.floor((H - 2 * (o + band + 20)) / chh);
+          for (let c = 0, i = 0; x0 - c * cw > o + band + 20; c++) for (let r = 0; r < rows; r++, i++) ctx.fillText(JING[i % JING.length], x0 - c * cw, o + band + 40 + r * chh);
+          ctx.restore();
+        }
+      }
       const wt = wmText();
       if (wt) {
         // 名字水印：先画在底层，再画正文
@@ -864,7 +905,9 @@
     return '<header class="head"><div><h1>设置与备份</h1><p class="sub">数据保存在这台电脑的这个浏览器里，换浏览器或清除浏览数据会丢失，请定期导出备份。</p></div></header>' +
       '<section class="card"><h2>打印抬头</h2><div class="g2"><label class="f"><span>诊所 / 机构名称</span><input type="text" data-set="clinic" id="s-clinic" placeholder="显示在处方笺和病历顶部" value="' + esc(s.clinic || '') + '"></label><label class="f"><span>医师姓名</span><input type="text" data-set="doctor" id="s-doctor" value="' + esc(s.doctor || '') + '"></label></div>' +
         '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-top:12px"><input type="checkbox" data-set="wm" id="s-wm" style="margin-top:5px"' + (s.wm === false ? '' : ' checked') + '><span>处方笺、病历和处方图片加名字水印<br><span class="fine">淡色文字斜着铺满背景，防止被翻拍冒用。</span></span></label>' +
-        '<label class="f" style="margin-top:8px"><span>水印文字（留空就用医师姓名）</span><input type="text" data-set="wmText" id="s-wmtext" maxlength="20" placeholder="' + esc(s.doctor || '如：峻雍') + '" value="' + esc(s.wmText || '') + '"></label></section>' +
+        '<label class="f" style="margin-top:8px"><span>水印文字（留空就用医师姓名）</span><input type="text" data-set="wmText" id="s-wmtext" maxlength="20" placeholder="' + esc(s.doctor || '如：峻雍') + '" value="' + esc(s.wmText || '') + '"></label>' +
+        '<label class="f" style="margin-top:8px"><span>纸面背景</span><select data-set="bg" id="s-bg">' + [['fret', '宣纸底 ＋ 回纹边框'], ['jing', '宣纸底 ＋ 回纹边框 ＋ 淡色经文（《素问·上古天真论》）'], ['none', '白纸（不加背景）']].map(o => '<option value="' + o[0] + '"' + (bgStyle() === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>' +
+        '<p class="fine" style="margin-top:6px">打印时如果背景没印出来，在打印窗口的「更多设置」里勾选「背景图形」。黑白打印机会把底色印成很浅的灰。</p></section>' +
       '<section class="card"><h2>接诊页</h2><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-set="showFour" id="s-four" style="margin-top:5px"' + (s.showFour === true ? ' checked' : '') + '><span>显示四诊点选区<br><span class="fine">打开后，接诊页会多出症状、舌、脉的点选区，以及依赖它的辨证参考栏和随症加味提示。关闭时四诊直接写在现病史里。</span></span></label></section>' +
       '<section class="card"><h2>密码与加密</h2>' + (cryptoKey
         ? '<p><span class="tag" style="background:var(--ok-l);color:var(--ok)">已加密</span>　病历、舌象照片和备份文件都用你的密码加密保存。忘记密码无法找回数据。</p><div class="acts" style="margin-top:12px"><label style="display:flex;align-items:center;gap:6px">无操作自动锁定<select data-set="autoLock" id="s-lock" style="width:auto">' + [[5, '5 分钟'], [10, '10 分钟'], [30, '30 分钟'], [0, '不自动锁定']].map(o => '<option value="' + o[0] + '"' + (Number(s.autoLock == null ? 10 : s.autoLock) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label><button class="btn" data-act="lock-now">立即锁定</button><button class="btn" data-act="pw-form" data-mode="change">修改密码</button><button class="btn danger" data-act="pw-form" data-mode="remove">取消密码</button></div>'
