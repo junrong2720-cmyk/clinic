@@ -90,13 +90,18 @@
       if (location.hash === '#settings' && modal.hidden) route();
     }).catch(() => {});
   }
-  /* 备份提醒：导出过备份文件或 GitHub 同步成功，都算备份过；只看真实数据，示例数据不提醒 */
-  const BACKUP_DAYS = 7;
+  /* 备份提醒（只看真实数据，示例数据不提醒）：
+     没开同步 → 7 天没导出备份文件就提醒；
+     开了 GitHub 同步 → 同步防的是电脑出事，防不了误删误改（会一起同步上去），所以同步 7 天没成功要提醒，备份文件也要每 30 天导出一份 */
+  const BACKUP_DAYS = 7, EXPORT_DAYS_SYNC = 30;
+  const daysSince = t => t ? Math.floor((Date.now() - t) / 864e5) : null;
   function backupInfo() {
     const real = db.patients.some(p => !p.demo) || db.visits.some(v => !v.demo);
-    const at = Math.max(db.backupAt || 0, (db.sync && db.sync.lastSync) || 0);
-    const days = at ? Math.floor((Date.now() - at) / 864e5) : null;
-    return { real: real, at: at, days: days, due: real && (days === null || days >= BACKUP_DAYS) };
+    const sync = !!db.sync, days = daysSince(db.backupAt), syncDays = sync ? daysSince(db.sync.lastSync) : null;
+    const old = (d, n) => d === null || d >= n;
+    const syncDue = real && sync && old(syncDays, BACKUP_DAYS);
+    const exportDue = real && old(days, sync ? EXPORT_DAYS_SYNC : BACKUP_DAYS);
+    return { real: real, sync: sync, at: db.backupAt || 0, days: days, syncDays: syncDays, syncDue: syncDue, exportDue: exportDue, due: syncDue || exportDue };
   }
   const agoText = d => d === 0 ? '今天' : d === 1 ? '昨天' : d + ' 天前';
   // 本机保存着的那份数据（加密时是密文），用来核对密码
@@ -329,7 +334,11 @@
   function backupBanner() {
     const b = backupInfo();
     if (!b.due) return '';
-    return '<div class="banner"><span>' + (b.at ? '已经 ' + b.days + ' 天没有备份病历了' : '病历还没有备份过') + '。数据只存在这台电脑的浏览器里，电脑或浏览器出问题就会丢失，建议每周导出一次。</span><span class="acts"><button class="btn sm" data-act="export">导出备份文件</button></span></div>';
+    const exp = b.at ? '已经 ' + b.days + ' 天没有导出备份文件了' : '还没有导出过备份文件';
+    const msg = !b.sync ? exp + '。数据只存在这台电脑的浏览器里，电脑或浏览器出问题就会丢失，建议每周导出一次。'
+      : b.syncDue ? (b.syncDays === null ? 'GitHub 同步还没有成功过' : 'GitHub 同步已经 ' + b.syncDays + ' 天没有成功了') + '，请到「设置与备份」检查同步。' + (b.exportDue ? exp + '。' : '')
+      : exp + '。同步能防电脑出事，但误删、改错也会一起同步上去，建议每月另外导出一份存好。';
+    return '<div class="banner"><span>' + msg + '</span><span class="acts">' + (b.syncDue ? '<button class="btn sm" data-act="go" data-to="settings">检查同步</button>' : '') + (b.exportDue ? '<button class="btn sm" data-act="export">导出备份文件</button>' : '') + '</span></div>';
   }
   function vDashboard() {
     const today = db.visits.filter(v => isToday(v.date)).length;
@@ -342,7 +351,7 @@
       (dp ? '<div class="banner"><span>有一份未保存的接诊草稿：' + esc(dp.name) + '</span><span class="acts"><button class="btn sm" data-act="go" data-to="consult/' + dp.id + (db.draft.id ? '/edit/' + db.draft.id : '') + '">继续填写</button><button class="btn sm" data-act="draft-drop">丢弃</button></span></div>' : '') +
       backupBanner() +
       (hasDemo ? '<div class="banner info"><span>下面带「示例」标记的患者和病历是演示数据，方便你先试用。</span><button class="btn sm" data-act="demo-clear">清除示例数据</button></div>' : '') +
-      '<p class="sum">今日接诊 <b>' + today + '</b> 人次<i></i>近 7 日 <b>' + week + '</b> 人次<i></i>在档患者 <b>' + db.patients.length + '</b> 人<i></i>病历 <b>' + db.visits.length + '</b> 份' + (bk.real && bk.at ? '<i></i>上次备份 <b>' + agoText(bk.days) + '</b>' : '') + '</p>' +
+      '<p class="sum">今日接诊 <b>' + today + '</b> 人次<i></i>近 7 日 <b>' + week + '</b> 人次<i></i>在档患者 <b>' + db.patients.length + '</b> 人<i></i>病历 <b>' + db.visits.length + '</b> 份' + (bk.real ? '<i></i>上次导出备份 <b>' + (bk.at ? agoText(bk.days) : '无') + '</b>' : '') + '</p>' +
       '<section class="card"><h2>最近病历</h2>' + visitTable(recent, true) + '</section>';
   }
 
@@ -952,7 +961,7 @@
           : '<p class="sub">当前打开方式不支持加密，请用 Chrome 或 Edge 打开。</p>') + '</section>' +
       syncCard() +
       '<section class="card"><h2>数据备份</h2><p class="sub" style="margin-bottom:6px">当前：患者 ' + db.patients.length + ' 人，病历 ' + db.visits.length + ' 份。备份文件包含常用方和舌象照片' + (cryptoKey ? '，并用当前密码加密' : '') + '。</p>' +
-        '<p class="fine" style="margin:0 0 12px">' + (db.backupAt ? '上次导出备份：' + dTime(db.backupAt) + '（' + agoText(Math.floor((Date.now() - db.backupAt) / 864e5)) + '）' : '这台电脑还没有导出过备份') + '。超过 ' + BACKUP_DAYS + ' 天没备份，工作台会提醒。' +
+        '<p class="fine" style="margin:0 0 12px">' + (db.backupAt ? '上次导出备份：' + dTime(db.backupAt) + '（' + agoText(daysSince(db.backupAt)) + '）' : '这台电脑还没有导出过备份') + '。' + (db.sync ? '开着同步：同步超过 ' + BACKUP_DAYS + ' 天没成功、或超过 ' + EXPORT_DAYS_SYNC + ' 天没导出备份文件，工作台会提醒（同步防不了误删误改）。' : '超过 ' + BACKUP_DAYS + ' 天没导出，工作台会提醒。') +
         (persisted === true ? '浏览器已同意长期保存这里的数据。' : persisted === false ? '浏览器没有同意长期保存（空间不足时可能清理），更要定期备份。' : '') + '</p><div class="acts"><button class="btn primary" data-act="export">导出备份文件</button><label class="btn">从备份恢复<input type="file" id="import-file" accept=".json,application/json" hidden></label></div></section>' +
       '<section class="card"><h2>清理</h2><div class="acts">' + (db.patients.some(p => p.demo) ? '<button class="btn" data-act="demo-clear">清除示例数据</button>' : '') + '<button class="btn danger" data-act="wipe">清空全部数据</button></div></section>';
   }
