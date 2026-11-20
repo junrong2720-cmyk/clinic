@@ -77,8 +77,28 @@
       else if (d && Array.isArray(d.patients) && Array.isArray(d.visits)) { d.settings = d.settings || {}; d.myFormulas = d.myFormulas || []; d.tomb = d.tomb || {}; db = d; }
     } catch (e) { /* 数据损坏时用示例数据启动 */ }
     booted = true;
+    askPersist();
     if (locked) showLock(); else route();
   }
+  // 请浏览器把这里的数据当成「要长期保存」的，空间紧张时不要自动清掉（浏览器可以拒绝，拒绝也不影响使用）
+  let persisted = null;
+  function askPersist() {
+    const st = navigator.storage;
+    if (!st || !st.persisted) return;
+    st.persisted().then(ok => ok || !st.persist ? ok : st.persist()).then(ok => {
+      persisted = !!ok;
+      if (location.hash === '#settings' && modal.hidden) route();
+    }).catch(() => {});
+  }
+  /* 备份提醒：导出过备份文件或 GitHub 同步成功，都算备份过；只看真实数据，示例数据不提醒 */
+  const BACKUP_DAYS = 7;
+  function backupInfo() {
+    const real = db.patients.some(p => !p.demo) || db.visits.some(v => !v.demo);
+    const at = Math.max(db.backupAt || 0, (db.sync && db.sync.lastSync) || 0);
+    const days = at ? Math.floor((Date.now() - at) / 864e5) : null;
+    return { real: real, at: at, days: days, due: real && (days === null || days >= BACKUP_DAYS) };
+  }
+  const agoText = d => d === 0 ? '今天' : d === 1 ? '昨天' : d + ' 天前';
   // 本机保存着的那份数据（加密时是密文），用来核对密码
   const storedBlob = () => saveChain.then(() => useLS ? localStorage.getItem(KEY) : kv.get('db')).then(raw => JSON.parse(raw));
   function save() {
@@ -306,17 +326,23 @@
   }
 
   /* ---------- 工作台 ---------- */
+  function backupBanner() {
+    const b = backupInfo();
+    if (!b.due) return '';
+    return '<div class="banner"><span>' + (b.at ? '已经 ' + b.days + ' 天没有备份病历了' : '病历还没有备份过') + '。数据只存在这台电脑的浏览器里，电脑或浏览器出问题就会丢失，建议每周导出一次。</span><span class="acts"><button class="btn sm" data-act="export">导出备份文件</button></span></div>';
+  }
   function vDashboard() {
     const today = db.visits.filter(v => isToday(v.date)).length;
     const week = db.visits.filter(v => Date.now() - new Date(v.date) < 7 * 864e5).length;
     const recent = db.visits.slice().sort(byDateDesc).slice(0, 10);
     const dp = draftDirty() && P(db.draft.patientId);
-    const hasDemo = db.patients.some(p => p.demo);
+    const hasDemo = db.patients.some(p => p.demo), bk = backupInfo();
     return '<header class="head"><div><h1>工作台</h1><p class="sub">' + new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }) + '</p></div>' +
       '<div class="acts"><button class="btn" data-act="go" data-to="consult">已有患者接诊</button><button class="btn primary" data-act="patient-form" data-then="consult">新患者接诊</button></div></header>' +
       (dp ? '<div class="banner"><span>有一份未保存的接诊草稿：' + esc(dp.name) + '</span><span class="acts"><button class="btn sm" data-act="go" data-to="consult/' + dp.id + (db.draft.id ? '/edit/' + db.draft.id : '') + '">继续填写</button><button class="btn sm" data-act="draft-drop">丢弃</button></span></div>' : '') +
+      backupBanner() +
       (hasDemo ? '<div class="banner info"><span>下面带「示例」标记的患者和病历是演示数据，方便你先试用。</span><button class="btn sm" data-act="demo-clear">清除示例数据</button></div>' : '') +
-      '<p class="sum">今日接诊 <b>' + today + '</b> 人次<i></i>近 7 日 <b>' + week + '</b> 人次<i></i>在档患者 <b>' + db.patients.length + '</b> 人<i></i>病历 <b>' + db.visits.length + '</b> 份</p>' +
+      '<p class="sum">今日接诊 <b>' + today + '</b> 人次<i></i>近 7 日 <b>' + week + '</b> 人次<i></i>在档患者 <b>' + db.patients.length + '</b> 人<i></i>病历 <b>' + db.visits.length + '</b> 份' + (bk.real && bk.at ? '<i></i>上次备份 <b>' + agoText(bk.days) + '</b>' : '') + '</p>' +
       '<section class="card"><h2>最近病历</h2>' + visitTable(recent, true) + '</section>';
   }
 
@@ -925,7 +951,9 @@
         : canCrypto ? '<p class="sub">目前没有密码，能打开这个页面的人都能看到病历。设置密码后，数据会加密保存，每次打开需要输入密码。</p><div class="acts" style="margin-top:12px"><button class="btn primary" data-act="pw-form" data-mode="set">设置密码</button></div>'
           : '<p class="sub">当前打开方式不支持加密，请用 Chrome 或 Edge 打开。</p>') + '</section>' +
       syncCard() +
-      '<section class="card"><h2>数据备份</h2><p class="sub" style="margin-bottom:12px">当前：患者 ' + db.patients.length + ' 人，病历 ' + db.visits.length + ' 份。备份文件包含常用方和舌象照片' + (cryptoKey ? '，并用当前密码加密' : '') + '。</p><div class="acts"><button class="btn primary" data-act="export">导出备份文件</button><label class="btn">从备份恢复<input type="file" id="import-file" accept=".json,application/json" hidden></label></div></section>' +
+      '<section class="card"><h2>数据备份</h2><p class="sub" style="margin-bottom:6px">当前：患者 ' + db.patients.length + ' 人，病历 ' + db.visits.length + ' 份。备份文件包含常用方和舌象照片' + (cryptoKey ? '，并用当前密码加密' : '') + '。</p>' +
+        '<p class="fine" style="margin:0 0 12px">' + (db.backupAt ? '上次导出备份：' + dTime(db.backupAt) + '（' + agoText(Math.floor((Date.now() - db.backupAt) / 864e5)) + '）' : '这台电脑还没有导出过备份') + '。超过 ' + BACKUP_DAYS + ' 天没备份，工作台会提醒。' +
+        (persisted === true ? '浏览器已同意长期保存这里的数据。' : persisted === false ? '浏览器没有同意长期保存（空间不足时可能清理），更要定期备份。' : '') + '</p><div class="acts"><button class="btn primary" data-act="export">导出备份文件</button><label class="btn">从备份恢复<input type="file" id="import-file" accept=".json,application/json" hidden></label></div></section>' +
       '<section class="card"><h2>清理</h2><div class="acts">' + (db.patients.some(p => p.demo) ? '<button class="btn" data-act="demo-clear">清除示例数据</button>' : '') + '<button class="btn danger" data-act="wipe">清空全部数据</button></div></section>';
   }
   function exportData() {
@@ -938,6 +966,8 @@
       const salt = saltB64;
       return (cryptoKey ? encStr(cryptoKey, plain).then(o => JSON.stringify({ app: 'tcm-clinic', version: 3, exportedAt: at, enc: 1, salt: salt, iv: o.iv, ct: o.ct })) : Promise.resolve(plain)).then(text => {
         download('中医诊疗备份_' + dOnly(new Date()) + (cryptoKey ? '_加密' : '') + '.json', text, 'application/json');
+        db.backupAt = Date.now(); save();
+        if (modal.hidden && /^(#(settings|dashboard)?)?$/.test(location.hash)) route();
         toast(lost ? '已导出，但有 ' + lost + ' 张照片读取失败、未包含在内' : '备份文件已导出' + (ids.length ? '（含 ' + ids.length + ' 张照片）' : '') + (cryptoKey ? '，已加密' : ''), !!lost);
       });
     }).catch(() => toast('导出失败', true));
