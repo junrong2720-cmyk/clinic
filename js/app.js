@@ -677,6 +677,16 @@
       '<h3>处方' + (v.rx.formula ? '　' + esc(v.rx.formula) : '') + '</h3>' + (v.rx.herbs.length ? '<div class="herbs">' + v.rx.herbs.map(h => '<span>' + herbLabel(h) + '</span>').join('') + '</div><p>共 ' + v.rx.herbs.length + ' 味 × ' + v.rx.doses + ' 剂　' + esc(v.rx.usage) + '</p>' : '<p class="muted">未开方</p>') +
       sec('医嘱', v.advice) + '</section>';
   }
+  // 名字水印：斜着平铺的淡色文字。默认用医师姓名，可在设置里改或关掉
+  const wmText = () => { const s = db.settings; return s.wm === false ? '' : String(s.wmText || s.doctor || s.clinic || '').trim().slice(0, 20); };
+  function wmSvg(id) {
+    const t = wmText(); if (!t) return '';
+    const w = Math.max(200, t.length * 34 + 90);
+    return '<svg class="wm" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="' + id + '" width="' + w + '" height="130" patternUnits="userSpaceOnUse" patternTransform="rotate(-28)">' +
+      '<text x="0" y="40" font-family="KaiTi,STKaiti,Kaiti SC,serif" font-size="28" fill="#000" fill-opacity=".075">' + esc(t) + '</text>' +
+      '<text x="' + (w / 2) + '" y="105" font-family="KaiTi,STKaiti,Kaiti SC,serif" font-size="28" fill="#000" fill-opacity=".075">' + esc(t) + '</text>' +
+      '</pattern></defs><rect width="100%" height="100%" fill="url(#' + id + ')"/></svg>';
+  }
   function printVisit(id, mode) {
     const v = V(id); if (!v) return;
     const p = P(v.patientId) || { name: '', gender: '' };
@@ -692,8 +702,9 @@
       ? sec('诊断', dx) + sec('治法', v.method) + rp + sec('医嘱', v.advice)
       : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('辅助检查', v.labs) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
       '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
-    $('#print').innerHTML = html;
-    openModal('<div class="sheet preview">' + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+    // 打印区和预览各用一个 pattern id：打印区平时是隐藏的，共用 id 会让预览里的水印画不出来
+    $('#print').innerHTML = wmSvg('wm-print') + html;
+    openModal('<div class="sheet preview">' + wmSvg('wm-prev') + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
   }
 
   /* ---------- 处方笺图片（发微信用）：直接画在画布上，不依赖外部库 ---------- */
@@ -724,7 +735,19 @@
         wrap(pair[1], CW - LW).forEach(l => { ctx.fillText(l, M + LW, y); y += 46; });
         y += 12; rule(1, '#aaa');
       };
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height); ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height);
+      const wt = wmText();
+      if (wt) {
+        // 名字水印：先画在底层，再画正文
+        const H = ctx.canvas.height;
+        ctx.save(); ctx.font = '44px ' + KAI; ctx.fillStyle = 'rgba(0,0,0,.075)'; ctx.textBaseline = 'middle';
+        const step = ctx.measureText(wt).width + 150;
+        ctx.translate(W / 2, H / 2); ctx.rotate(-28 * Math.PI / 180);
+        const R = Math.hypot(W, H) / 2 + step;
+        for (let yy = -R, row = 0; yy < R; yy += 200, row++) for (let xx = -R + (row % 2) * step / 2; xx < R; xx += step) ctx.fillText(wt, xx, yy);
+        ctx.restore();
+      }
+      ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
       ctx.textAlign = 'center';
       ctx.font = '56px ' + KAI; ctx.fillText(s.clinic || '中医门诊', W / 2, y); y += 78;
       ctx.font = '32px ' + SANS; ctx.fillText(mode === 'rx' ? '处  方  笺' : '门 诊 病 历', W / 2, y); y += 58;
@@ -839,7 +862,9 @@
   function vSettings() {
     const s = db.settings;
     return '<header class="head"><div><h1>设置与备份</h1><p class="sub">数据保存在这台电脑的这个浏览器里，换浏览器或清除浏览数据会丢失，请定期导出备份。</p></div></header>' +
-      '<section class="card"><h2>打印抬头</h2><div class="g2"><label class="f"><span>诊所 / 机构名称</span><input type="text" data-set="clinic" id="s-clinic" placeholder="显示在处方笺和病历顶部" value="' + esc(s.clinic || '') + '"></label><label class="f"><span>医师姓名</span><input type="text" data-set="doctor" id="s-doctor" value="' + esc(s.doctor || '') + '"></label></div></section>' +
+      '<section class="card"><h2>打印抬头</h2><div class="g2"><label class="f"><span>诊所 / 机构名称</span><input type="text" data-set="clinic" id="s-clinic" placeholder="显示在处方笺和病历顶部" value="' + esc(s.clinic || '') + '"></label><label class="f"><span>医师姓名</span><input type="text" data-set="doctor" id="s-doctor" value="' + esc(s.doctor || '') + '"></label></div>' +
+        '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-top:12px"><input type="checkbox" data-set="wm" id="s-wm" style="margin-top:5px"' + (s.wm === false ? '' : ' checked') + '><span>处方笺、病历和处方图片加名字水印<br><span class="fine">淡色文字斜着铺满背景，防止被翻拍冒用。</span></span></label>' +
+        '<label class="f" style="margin-top:8px"><span>水印文字（留空就用医师姓名）</span><input type="text" data-set="wmText" id="s-wmtext" maxlength="20" placeholder="' + esc(s.doctor || '如：峻雍') + '" value="' + esc(s.wmText || '') + '"></label></section>' +
       '<section class="card"><h2>接诊页</h2><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-set="showFour" id="s-four" style="margin-top:5px"' + (s.showFour === true ? ' checked' : '') + '><span>显示四诊点选区<br><span class="fine">打开后，接诊页会多出症状、舌、脉的点选区，以及依赖它的辨证参考栏和随症加味提示。关闭时四诊直接写在现病史里。</span></span></label></section>' +
       '<section class="card"><h2>密码与加密</h2>' + (cryptoKey
         ? '<p><span class="tag" style="background:var(--ok-l);color:var(--ok)">已加密</span>　病历、舌象照片和备份文件都用你的密码加密保存。忘记密码无法找回数据。</p><div class="acts" style="margin-top:12px"><label style="display:flex;align-items:center;gap:6px">无操作自动锁定<select data-set="autoLock" id="s-lock" style="width:auto">' + [[5, '5 分钟'], [10, '10 分钟'], [30, '30 分钟'], [0, '不自动锁定']].map(o => '<option value="' + o[0] + '"' + (Number(s.autoLock == null ? 10 : s.autoLock) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label><button class="btn" data-act="lock-now">立即锁定</button><button class="btn" data-act="pw-form" data-mode="change">修改密码</button><button class="btn danger" data-act="pw-form" data-mode="remove">取消密码</button></div>'
