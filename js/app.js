@@ -330,6 +330,82 @@
     hydratePhotos(modal);
   }
 
+  /* ---------- 导入患者记录：患者端「随诊本 → 发给医生」生成的 .txt 文件 ----------
+     文件上半是给人看的小结，分隔线下面是 JSON；按处方编号（就是病历编号）自动找到患者。
+     文件来自患者手机，内容一律当不可信数据：逐项校验、转义后才显示 */
+  const PR_MARK = '-----CARE-NOTEBOOK-REPORT-----';
+  const PR_FEEL = ['很差', '较差', '一般', '较好', '很好'], PR_GFP = { g: '好', f: '一般', p: '差' }, PR_STOOL = { n: '正常', d: '偏干', l: '偏稀', x: '未解' };
+  const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
+  const prMD = d => +d.slice(5, 7) + '/' + +d.slice(8, 10);
+  let pr = null;
+  function prDay(x) {
+    return [x.taken ? '服药 ' + x.taken + ' 次' : '', x.feel ? '感觉' + PR_FEEL[x.feel - 1] : '', x.sleep ? '睡眠' + PR_GFP[x.sleep] : '', x.appetite ? '胃口' + PR_GFP[x.appetite] : '', x.stool ? '大便' + PR_STOOL[x.stool] : ''].filter(Boolean).join('，');
+  }
+  function prText(r) {
+    const head = '【随诊本记录】' + (r.rx.formula || '处方') + (r.rx.start ? '，' + prMD(r.rx.start) + ' 起服' : '') + (r.due ? '，已服 ' + r.got + '/' + r.due + ' 次' : '') + '。';
+    return [head].concat(r.days.filter(x => prDay(x) || x.note).map(x => prMD(x.d) + ' ' + [prDay(x), x.note].filter(Boolean).join('；'))).join('\n');
+  }
+  async function readReport(file, hintPid) {
+    let txt = '', o = null;
+    try { txt = await file.text(); } catch (e) { /* 读不了就当无效 */ }
+    const i = txt.indexOf(PR_MARK);
+    try { o = JSON.parse(i >= 0 ? txt.slice(i + PR_MARK.length) : txt); } catch (e) { o = null; }
+    if (!o || o.app !== 'care-notebook' || o.kind !== 'report' || !o.rx || typeof o.rx !== 'object' || !Array.isArray(o.days)) { toast('这不是「随诊本」发来的患者记录文件', true); return; }
+    const str = (v, n) => typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, n) : '';
+    const ymdOk = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    const src = o.photos && typeof o.photos === 'object' ? o.photos : {};
+    const okPic = id => own(src, id) && typeof src[id] === 'string' && src[id].length < 4e6 && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(src[id]);
+    const photos = {}, photoDay = {};
+    const days = o.days.filter(x => x && ymdOk(x.d)).slice(0, 120).map(x => {
+      const pics = (Array.isArray(x.photos) ? x.photos : []).slice(0, 3).filter(okPic);
+      pics.forEach(id => { photos[id] = src[id]; photoDay[id] = x.d; });
+      return { d: x.d, feel: [1, 2, 3, 4, 5].indexOf(x.feel) >= 0 ? x.feel : 0, sleep: own(PR_GFP, x.sleep) ? x.sleep : '', appetite: own(PR_GFP, x.appetite) ? x.appetite : '', stool: own(PR_STOOL, x.stool) ? x.stool : '', note: str(x.note, 500).replace(/\s+/g, ' ').trim(), taken: Math.min(9, Math.max(0, parseInt(x.taken, 10) || 0)), photos: pics };
+    }).sort((a, b) => a.d < b.d ? -1 : 1);
+    const num = v => Math.min(999, Math.max(0, parseInt(v, 10) || 0));
+    const rx = { id: str(o.rx.id, 60), formula: str(o.rx.formula, 40), date: typeof o.rx.date === 'string' && !isNaN(Date.parse(o.rx.date)) ? o.rx.date : '', start: ymdOk(o.rx.start) ? o.rx.start : '' };
+    const v = rx.id && V(rx.id), pid = v && P(v.patientId) ? v.patientId : '';
+    pr = { at: typeof o.at === 'string' && !isNaN(Date.parse(o.at)) ? o.at : '', name: str(o.name, 20), rx: rx, got: num(o.got), due: num(o.due), days: days, photos: photos, photoDay: photoDay, pid: pid };
+    const p = pid && P(pid), ids = Object.keys(photos), room = MAX_PHOTOS;
+    const pickP = hintPid || (db.patients.find(x => pr.name && x.name === pr.name) || {}).id || '';
+    const cell = s => '<td>' + (s ? esc(s) : '<span class="muted">—</span>') + '</td>';
+    openModal('<h2>导入患者记录</h2><p class="fine">来自患者手机上的「随诊本」' + (pr.at ? '，' + dTime(pr.at) + ' 生成' : '') + (pr.name ? '，患者填的名字：' + esc(pr.name) : '') + '。</p>' +
+      '<p style="margin:10px 0">处方：<b>' + esc(rx.formula || '—') + '</b>' + (rx.date ? '（' + dOnly(rx.date) + ' 开）' : '') + (pr.due ? '　已服 <b>' + pr.got + '</b> / ' + pr.due + ' 次' : '') + '</p>' +
+      (p ? '<p style="margin:0 0 10px">患者：<b>' + esc(p.name) + '</b>　<span class="fine">按处方自动对应</span></p>'
+        : '<label class="f"><span>' + (rx.id && !v ? '这张处方在这台电脑上找不到（可能是别的设备开的或已删除），' : '') + '请选择这是哪位患者</span><select id="pr-pid"><option value="">— 选择患者 —</option>' + db.patients.slice().sort((a, b) => a.name.localeCompare(b.name, 'zh')).map(x => '<option value="' + esc(x.id) + '"' + (x.id === pickP ? ' selected' : '') + '>' + esc(x.name) + (x.phone ? '　' + esc(x.phone) : '') + '</option>').join('') + '</select></label>') +
+      (days.length ? '<div class="tw" style="max-height:260px;overflow:auto"><table class="list"><thead><tr><th>日期</th><th>服药</th><th>感觉</th><th>睡眠</th><th>胃口</th><th>大便</th><th>备注</th></tr></thead><tbody>' +
+        days.map(x => '<tr><td class="nowrap">' + prMD(x.d) + '</td>' + cell(x.taken ? x.taken + ' 次' : '') + cell(x.feel ? PR_FEEL[x.feel - 1] : '') + cell(PR_GFP[x.sleep]) + cell(PR_GFP[x.appetite]) + cell(PR_STOOL[x.stool]) + cell(x.note) + '</tr>').join('') + '</tbody></table></div>'
+        : '<p class="muted">没有每日记录。</p>') +
+      (ids.length ? '<h3 style="margin:14px 0 8px">舌象照片 ' + ids.length + ' 张（勾选的加入本次接诊，每次最多 ' + room + ' 张）</h3><div class="phs">' +
+        ids.map((id, k) => '<figure class="ph pr-ph"><img src="' + photos[id] + '" alt="舌象照片"><label><input type="checkbox" data-pr-ph="' + esc(id) + '"' + (k >= ids.length - room ? ' checked' : '') + '> ' + prMD(photoDay[id]) + '</label></figure>').join('') + '</div>' : '') +
+      '<p class="fine" style="margin-top:12px">导入后打开这位患者的复诊接诊页：每日记录整理成一段文字加在「现病史」后面，勾选的照片放进舌象照片，都可以再修改。</p>' +
+      '<div class="acts"><button class="btn" data-act="modal-close">取消</button><button class="btn primary" data-act="pr-import">导入到复诊接诊</button></div>', true);
+  }
+  async function prImport() {
+    const r = pr; if (!r) return;
+    const sel = $('#pr-pid'), p = P(r.pid || (sel ? sel.value : ''));
+    if (!p) { toast('请先选择患者', true); return; }
+    if (draftDirty() && (db.draft.id || db.draft.patientId !== p.id)) {
+      const o = P(db.draft.patientId);
+      toast('有一份' + (o ? ' ' + o.name + ' ' : '') + '未保存的接诊草稿，请先保存或丢弃再导入', true); return;
+    }
+    const picked = Array.from(modal.querySelectorAll('input[data-pr-ph]:checked')).map(x => x.dataset.prPh);
+    closeModal(); pr = null;
+    prepareDraft(p);
+    const d = draft, txt = prText(r);
+    d.hpi = d.hpi && d.hpi.trim() ? d.hpi.replace(/\s+$/, '') + '\n' + txt : txt;
+    let room = MAX_PHOTOS - tonguePh(d).length, n = 0;
+    for (const id of picked) {
+      if (room <= 0) break;
+      const nid = uid();
+      d.photos.push({ id: nid, at: new Date(r.photoDay[id] + 'T12:00:00').toISOString(), from: 'patient' }); phCache.set(nid, r.photos[id]);
+      try { await phPut(nid, r.photos[id]); room--; n++; } catch (e) { d.photos.splice(d.photos.findIndex(x => x.id === nid), 1); phCache.delete(nid); }
+    }
+    save();
+    go('consult/' + p.id);
+    toast('已导入每日记录 ' + r.days.length + ' 天' + (n ? '、舌象照片 ' + n + ' 张' : '') + (picked.length > n ? '（照片超出上限，只加了 ' + n + ' 张）' : '') + '，核对后保存病历');
+  }
+  const prBtn = pid => '<label class="btn">导入患者记录<input type="file" id="pr-file"' + (pid ? ' data-pid="' + pid + '"' : '') + ' accept=".txt,.json,text/plain,application/json" hidden></label>';
+
   /* ---------- 工作台 ---------- */
   function backupBanner() {
     const b = backupInfo();
@@ -347,7 +423,7 @@
     const dp = draftDirty() && P(db.draft.patientId);
     const hasDemo = db.patients.some(p => p.demo), bk = backupInfo();
     return '<header class="head"><div><h1>工作台</h1><p class="sub">' + new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }) + '</p></div>' +
-      '<div class="acts"><button class="btn" data-act="go" data-to="consult">已有患者接诊</button><button class="btn primary" data-act="patient-form" data-then="consult">新患者接诊</button></div></header>' +
+      '<div class="acts">' + prBtn() + '<button class="btn" data-act="go" data-to="consult">已有患者接诊</button><button class="btn primary" data-act="patient-form" data-then="consult">新患者接诊</button></div></header>' +
       (dp ? '<div class="banner"><span>有一份未保存的接诊草稿：' + esc(dp.name) + '</span><span class="acts"><button class="btn sm" data-act="go" data-to="consult/' + dp.id + (db.draft.id ? '/edit/' + db.draft.id : '') + '">继续填写</button><button class="btn sm" data-act="draft-drop">丢弃</button></span></div>' : '') +
       backupBanner() +
       (hasDemo ? '<div class="banner info"><span>下面带「示例」标记的患者和病历是演示数据，方便你先试用。</span><button class="btn sm" data-act="demo-clear">清除示例数据</button></div>' : '') +
@@ -376,7 +452,7 @@
   function vPatient(p) {
     const vs = visitsOf(p.id);
     return '<header class="head"><div><h1>' + esc(p.name) + (p.demo ? ' <span class="tag gray">示例</span>' : '') + '</h1><p class="sub"><a class="link" href="#patients">患者档案</a> / 详情</p></div>' +
-      '<div class="acts"><button class="btn danger" data-act="patient-del" data-id="' + p.id + '">删除</button><button class="btn" data-act="patient-form" data-id="' + p.id + '">编辑资料</button>' + (vs.length ? '<button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用上次）</button>' : '') + '<button class="btn primary" data-act="go" data-to="consult/' + p.id + '">接诊</button></div></header>' +
+      '<div class="acts"><button class="btn danger" data-act="patient-del" data-id="' + p.id + '">删除</button><button class="btn" data-act="patient-form" data-id="' + p.id + '">编辑资料</button>' + prBtn(p.id) + '' + (vs.length ? '<button class="btn" data-act="go" data-to="consult/' + p.id + '/copy">复诊（沿用上次）</button>' : '') + '<button class="btn primary" data-act="go" data-to="consult/' + p.id + '">接诊</button></div></header>' +
       '<section class="card"><h2>基本资料</h2>' + patientInfo(p) + '</section>' +
       (vs.some(v => tonguePh(v).length) ? '<section class="card"><h2>舌象变化</h2><div class="ph-tl">' + vs.filter(v => tonguePh(v).length).reverse().map(v => '<div><div class="phs">' + photoThumbs(tonguePh(v)) + '</div><p class="cap">' + dOnly(v.date) + ' ' + v.type + (tongueText(v) ? '<br>' + esc(tongueText(v)) : '') + '</p></div>').join('') + '</div></section>' : '') +
       '<section class="card"><h2>就诊记录（' + vs.length + '）</h2>' + (vs.length ? '<div class="tl">' + vs.map(v => '<div class="tl-i" data-act="go" data-to="visit/' + v.id + '"><div class="tl-d">' + dTime(v.date) + '<br><span class="tag' + (v.type === '初诊' ? ' zhu' : '') + '">' + v.type + '</span></div><div><b>' + esc(v.chief) + '</b><br>' + esc(dxText(v)) + (v.method ? '　治法：' + esc(v.method) : '') + '<br><span class="muted">' + esc(rxText(v)) + '</span></div></div>').join('') + '</div>' : '<p class="empty">尚无就诊记录</p>') + '</section>';
@@ -1483,6 +1559,7 @@
   const acts = {
     go: el => go(el.dataset.to),
     'modal-close': closeModal,
+    'pr-import': () => prImport(),
     'modal-yes': () => { const f = pendingYes; if (f) f(); },
     'patient-form': el => patientForm(el.dataset.id, el.dataset.then),
     'patient-del': el => {
@@ -1654,6 +1731,7 @@
     const t = e.target;
     if (t.id === 'import-file' && t.files[0]) { if (db.sync) toast('已开启同步，请先断开同步再从备份恢复', true); else importData(t.files[0]); t.value = ''; }
     else if (t.id === 'ph-file' && draft) { addPhotos(t.files); t.value = ''; }
+    else if (t.id === 'pr-file' && t.files[0]) { readReport(t.files[0], t.dataset.pid); t.value = ''; }
     else if (t.id === 'lab-file' && draft) { addPhotos(t.files, 'lab'); t.value = ''; }
     else if (t.dataset.hf === 'name' && draft) splitHerbName(t);
   });
