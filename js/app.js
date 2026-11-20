@@ -729,7 +729,7 @@
     const html = head + (mode === 'rx'
       ? (q => sec('诊断', q.dx) + sec('治法', q.m) + sec('方名', q.f))(rxParts(v)) + rp + sec('医嘱', v.advice)
       : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('辅助检查', v.labs) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
-      '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
+      '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span></div>';
     // 打印区和预览各用一个 pattern id：打印区平时是隐藏的，共用 id 会让预览里的水印画不出来
     const hasBg = bgStyle() !== 'none';
     $('#print').innerHTML = sheetLayers('wm-print') + html;
