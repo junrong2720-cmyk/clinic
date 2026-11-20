@@ -708,6 +708,13 @@
       svgAt(28, '<rect x=".5" y=".5" width="99.6%" height="99.6%" fill="none" stroke="#B8403F" stroke-opacity=".35"/>');
   }
   const sheetLayers = id => bgSvg(id + '-bg') + wmSvg(id);
+  // 处方笺上方名 / 病名 / 证型 / 治法可以不印（设置记住选择；门诊病历始终完整）
+  const RX_OPTS = [['rxF', '方名'], ['rxDis', '病名'], ['rxSyn', '证型'], ['rxM', '治法']];
+  function rxParts(v) {
+    const on = k => db.settings[k] !== false;
+    const dx = [on('rxDis') && v.disease, on('rxSyn') && v.syndrome].filter(Boolean).join(' · ') + (on('rxDis') && v.western ? '（' + v.western + '）' : '');
+    return { f: on('rxF') ? v.rx.formula : '', dx: dx, m: on('rxM') ? v.method : '' };
+  }
   function printVisit(id, mode) {
     const v = V(id); if (!v) return;
     const p = P(v.patientId) || { name: '', gender: '' };
@@ -720,14 +727,17 @@
     const rp = '<div class="rp-R">Rp.</div><div class="rp-herbs">' + v.rx.herbs.map(h => '<span>' + herbLabel(h) + '</span>').join('') + '</div>' +
       '<div class="rp-sec"><b>用法</b>共 ' + v.rx.herbs.length + ' 味，' + v.rx.doses + ' 剂。' + esc(v.rx.usage) + '</div>';
     const html = head + (mode === 'rx'
-      ? sec('诊断', dx) + sec('治法', v.method) + rp + sec('医嘱', v.advice)
+      ? (q => sec('诊断', q.dx) + sec('治法', q.m) + sec('方名', q.f))(rxParts(v)) + rp + sec('医嘱', v.advice)
       : sec('主诉', v.chief) + sec('现病史', v.hpi) + (p.history ? sec('既往史', p.history) : '') + sec('四诊', four) + sec('辅助检查', v.labs) + sec('诊断', dx) + sec('治法', v.method) + (v.rx.herbs.length ? '<div class="rp-sec"><b>处方</b>' + esc(v.rx.formula) + '</div>' + rp : '') + sec('医嘱', v.advice)) +
       '<div class="rp-foot"><span>医师：' + esc(s.doctor || '') + (s.doctor ? '' : '＿＿＿＿＿＿') + '</span>' + (mode === 'rx' ? '<span>审核：＿＿＿＿</span><span>调配：＿＿＿＿</span><span>核对发药：＿＿＿＿</span>' : '') + '</div>';
     // 打印区和预览各用一个 pattern id：打印区平时是隐藏的，共用 id 会让预览里的水印画不出来
     const hasBg = bgStyle() !== 'none';
     $('#print').innerHTML = sheetLayers('wm-print') + html;
     $('#print').classList.toggle('has-bg', hasBg);
-    openModal('<div class="sheet preview' + (hasBg ? ' has-bg' : '') + '">' + sheetLayers('wm-prev') + html + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+    openModal('<div class="sheet preview' + (hasBg ? ' has-bg' : '') + '">' + sheetLayers('wm-prev') + html + '</div>' + (mode === 'rx' ? '<div class="rx-opts" id="rx-opts"><span>处方笺上打印：</span>' + RX_OPTS.map(o => '<label><input type="checkbox" data-set="' + o[0] + '"' + (s[o[0]] === false ? '' : ' checked') + '> ' + o[1] + '</label>').join('') + '</div>' : '') + '<div class="acts"><button class="btn" data-act="modal-close">关闭</button><button class="btn" data-act="print" data-id="' + v.id + '" data-mode="' + (mode === 'rx' ? 'record' : 'rx') + '">改看' + (mode === 'rx' ? '门诊病历' : '处方笺') + '</button><button class="btn" data-act="sheet-img" data-id="' + v.id + '" data-mode="' + mode + '">保存为图片</button><button class="btn primary" data-act="do-print">打印</button></div>', true);
+    const opts = $('#rx-opts');
+    // 勾选变化后马上重画预览和打印区（设置由通用的 data-set 处理保存）
+    if (opts) opts.addEventListener('change', e => { const t = e.target; if (t.dataset.set) { db.settings[t.dataset.set] = t.checked; printVisit(id, mode); } });
   }
 
   /* ---------- 处方笺图片（发微信用）：直接画在画布上，不依赖外部库 ---------- */
@@ -738,7 +748,8 @@
     const SANS = '"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","Noto Sans SC",sans-serif', KAI = '"KaiTi","STKaiti","Kaiti SC",' + SANS;
     const dx = [v.disease, v.syndrome].filter(Boolean).join(' · ') + (v.western ? '（' + v.western + '）' : '');
     const info = ['姓名：' + p.name, '性别：' + p.gender, '年龄：' + (p.id ? ageText(p) : ''), '日期：' + dOnly(v.date), v.type].concat(p.allergy ? ['过敏史：' + p.allergy] : [], v.pregnant ? ['妊娠期'] : []);
-    const before = mode === 'rx' ? [['诊断', dx], ['治法', v.method]]
+    const rq = rxParts(v);
+    const before = mode === 'rx' ? [['诊断', rq.dx], ['治法', rq.m], ['方名', rq.f]]
       : [['主诉', v.chief], ['现病史', v.hpi], ['既往史', p.history], ['四诊', [fourText(v), v.exam].filter(Boolean).join('；')], ['辅助检查', v.labs], ['诊断', dx], ['治法', v.method]];
     const n = v.rx.herbs.length;
     const after = [['用法', n ? '共 ' + n + ' 味，' + v.rx.doses + ' 剂。' + v.rx.usage : ''], ['医嘱', v.advice]];

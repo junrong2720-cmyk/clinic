@@ -262,6 +262,9 @@ table.stat .num{text-align:right}
 .sheet>:not(.wm){position:relative;z-index:1}
 .sheet.has-bg{padding:44px 48px}
 .preview.has-bg{padding:44px 48px}
+.rx-opts{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin-top:12px;font-size:14px}
+.rx-opts label{display:flex;align-items:center;gap:4px;cursor:pointer}
+@media print{.rx-opts{display:none}}
 .sheet .rp-head{text-align:center;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:10px}
 .sheet .rp-head h1{font:28px var(--f-kai);letter-spacing:.2em}
 .sheet .rp-head p{font-size:17px;letter-spacing:.6em;margin-top:2px}
@@ -309,7 +312,7 @@ table.stat .num{text-align:right}
 <datalist id="herb-list"></datalist>
 <datalist id="disease-list"></datalist>
 <!-- 每次更新程序时把 v 改掉，保证两个文件一起刷新，不会新旧混用 -->
-<script src="js/data.js?v=20261120b"></script>
-<script src="js/app.js?v=20261120b"></script>
+<script src="js/data.js?v=20261120c"></script>
+<script src="js/app.js?v=20261120c"></script>
 </body>
 </html>
