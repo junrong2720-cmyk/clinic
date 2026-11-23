@@ -316,18 +316,69 @@
       else if (list.length > room) toast('只加入了前 ' + room + ' 张，每次就诊最多 ' + MAX_PHOTOS + ' 张', true);
     });
   }
+  /* 全屏看图：两指捏合或双击放大，拖动看细节；舌象可与上次对照，同一次就诊多张可左右翻 */
+  const viewer = document.createElement('div');
+  viewer.className = 'viewer'; viewer.hidden = true;
+  viewer.setAttribute('role', 'dialog'); viewer.setAttribute('aria-modal', 'true');
+  document.body.appendChild(viewer);
+  let vw = null;
   function viewPhoto(id) {
     const has = v => (v.photos || []).some(p => p.id === id);
     const owner = draft && has(draft) ? draft : db.visits.find(has);
     if (!owner) return;
-    if (owner.photos.find(p => p.id === id).kind === 'lab') {
-      openModal('<h2>检查报告</h2><div class="ph-cmp"><figure><img data-photo="' + id + '" alt="检查报告"><figcaption>' + dOnly(owner.date) + '</figcaption></figure></div><div class="acts"><button class="btn" data-act="modal-close">关闭</button></div>', true);
-      hydratePhotos(modal); return;
-    }
-    const prev = visitsOf(owner.patientId).filter(v => v.id !== owner.id && new Date(v.date) < new Date(owner.date) && tonguePh(v).length)[0];
-    const fig = (pid, v, tag) => '<figure><img data-photo="' + pid + '" alt="舌象照片"><figcaption><b>' + tag + '</b>　' + dOnly(v.date) + (tongueText(v) ? '　' + esc(tongueText(v)) : '') + '</figcaption></figure>';
-    openModal('<h2>' + (prev ? '舌象对照' : '舌象照片') + '</h2><div class="ph-cmp">' + (prev ? fig(tonguePh(prev)[0].id, prev, '上次') : '') + fig(id, owner, prev ? '本次' : '就诊') + '</div><div class="acts"><button class="btn" data-act="modal-close">关闭</button></div>', true);
-    hydratePhotos(modal);
+    const lab = owner.photos.find(p => p.id === id).kind === 'lab', list = lab ? labPh(owner) : tonguePh(owner);
+    const prev = lab ? null : visitsOf(owner.patientId).filter(v => v.id !== owner.id && new Date(v.date) < new Date(owner.date) && tonguePh(v).length)[0];
+    vw = { owner: owner, list: list, i: Math.max(0, list.findIndex(p => p.id === id)), prev: prev, lab: lab, compare: false };
+    renderViewer();
+  }
+  function renderViewer() {
+    const o = vw, cur = o.list[o.i], kind = o.lab ? '检查报告' : '舌象照片';
+    const pane = (pid, v, tag) => '<div class="vw-pane"><img data-photo="' + pid + '" alt="' + kind + '" draggable="false">' +
+      '<p class="vw-cap">' + (tag ? '<b>' + tag + '</b>　' : '') + dOnly(v.date) + (!o.lab && tongueText(v) ? '　' + esc(tongueText(v)) : '') + '</p></div>';
+    viewer.innerHTML = '<div class="vw-bar"><span>' + kind + (o.list.length > 1 && !o.compare ? '　' + (o.i + 1) + ' / ' + o.list.length : '') + '<small>两指或双击放大，拖动看细节</small></span>' +
+      '<span class="vw-acts">' + (o.prev ? '<button type="button" data-act="vw-compare">' + (o.compare ? '只看本次' : '对照上次') + '</button>' : '') + '<button type="button" data-act="vw-close" aria-label="关闭">✕ 关闭</button></span></div>' +
+      '<div class="vw-body' + (o.compare ? ' two' : '') + '">' + (o.compare ? pane(tonguePh(o.prev)[0].id, o.prev, '上次') + pane(cur.id, o.owner, '本次') : pane(cur.id, o.owner, '')) +
+      (o.list.length > 1 && !o.compare ? '<button type="button" class="vw-nav l" data-act="vw-nav" data-d="-1" aria-label="上一张">‹</button><button type="button" class="vw-nav r" data-act="vw-nav" data-d="1" aria-label="下一张">›</button>' : '') + '</div>';
+    viewer.hidden = false; document.body.classList.add('vw-open');
+    hydratePhotos(viewer);
+    viewer.querySelectorAll('.vw-pane').forEach(zoomable);
+  }
+  function closeViewer() { if (!vw) return; viewer.hidden = true; viewer.innerHTML = ''; vw = null; document.body.classList.remove('vw-open'); }
+  // 一个可缩放的看图区：缩放 1–6 倍，以手指或鼠标所在位置为中心
+  function zoomable(pane) {
+    const img = pane.querySelector('img'), pts = new Map();
+    let s = 1, x = 0, y = 0, pinch = null, lastTap = 0;
+    const apply = () => { img.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')'; };
+    const clamp = () => {
+      if (s <= 1.01) { s = 1; x = 0; y = 0; return; }
+      const r = pane.getBoundingClientRect(), mx = r.width * (s - 1) / 2, my = r.height * (s - 1) / 2;
+      x = Math.max(-mx, Math.min(mx, x)); y = Math.max(-my, Math.min(my, y));
+    };
+    const zoomAt = (ns, cx, cy) => {
+      const r = pane.getBoundingClientRect(), px = cx - r.left - r.width / 2, py = cy - r.top - r.height / 2;
+      ns = Math.max(1, Math.min(6, ns));
+      x = px - (px - x) * ns / s; y = py - (py - y) * ns / s; s = ns;
+      clamp(); apply();
+    };
+    const dist = () => { const p = Array.from(pts.values()); return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
+    pane.addEventListener('pointerdown', e => {
+      try { pane.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) { pinch = { s: s, d: dist() }; lastTap = 0; return; }
+      const now = Date.now();
+      if (now - lastTap < 320) { zoomAt(s > 1 ? 1 : 2.5, e.clientX, e.clientY); lastTap = 0; } else lastTap = now;
+    });
+    pane.addEventListener('pointermove', e => {
+      const last = pts.get(e.pointerId); if (!last) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2 && pinch && pinch.d) {
+        const p = Array.from(pts.values());
+        zoomAt(pinch.s * dist() / pinch.d, (p[0].x + p[1].x) / 2, (p[0].y + p[1].y) / 2);
+      } else if (pts.size === 1 && s > 1) { x += e.clientX - last.x; y += e.clientY - last.y; clamp(); apply(); }
+    });
+    const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+    pane.addEventListener('pointerup', up); pane.addEventListener('pointercancel', up);
+    pane.addEventListener('wheel', e => { e.preventDefault(); zoomAt(s * (e.deltaY < 0 ? 1.25 : 0.8), e.clientX, e.clientY); }, { passive: false });
   }
 
   /* ---------- 导入患者记录：患者端「随诊本 → 发给医生」生成的 .txt 文件 ----------
@@ -1526,6 +1577,7 @@
 
   /* ---------- 路由 ---------- */
   function route() {
+    closeViewer();
     if (locked) return;
     $('#side-lock').hidden = !cryptoKey;
     const parts = decodeURIComponent(location.hash.slice(1) || 'dashboard').split('/');
@@ -1676,6 +1728,9 @@
       idb.keys().then(ks => Promise.all(ks.map(k => idb.del(k)))).catch(() => {}).then(() => location.reload());
     }, true),
     'photo-view': el => viewPhoto(el.dataset.id),
+    'vw-close': closeViewer,
+    'vw-compare': () => { vw.compare = !vw.compare; renderViewer(); },
+    'vw-nav': el => { vw.i = (vw.i + Number(el.dataset.d) + vw.list.length) % vw.list.length; renderViewer(); },
     'photo-del': el => { draft.photos = draft.photos.filter(p => p.id !== el.dataset.id); renderPhotos(); queueSave(); },
     'add-herb': el => {
       draft.rx.herbs.push({ name: el.dataset.n, dose: Number(el.dataset.d), unit: 'g', note: el.dataset.note || T.autoNote(el.dataset.n) });
@@ -1736,6 +1791,10 @@
     else if (t.dataset.hf === 'name' && draft) splitHerbName(t);
   });
   document.addEventListener('keydown', e => {
+    if (vw) {
+      if (e.key === 'Escape') { closeViewer(); return; }
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && vw.list.length > 1 && !vw.compare) { vw.i = (vw.i + (e.key === 'ArrowLeft' ? -1 : 1) + vw.list.length) % vw.list.length; renderViewer(); return; }
+    }
     if (e.key === 'Escape' && !modal.hidden) closeModal();
     if (e.key === 'Enter' && e.target.id === 'rx-quick') { e.preventDefault(); runRx(e.target.value); e.target.value = ''; }
     // 药物表格里按回车：药名 → 剂量 → 下一行药名
